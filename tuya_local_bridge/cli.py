@@ -223,6 +223,22 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    from .web import create_app  # imported lazily: Flask is an optional extra
+
+    app = create_app(
+        args.dir,
+        instance_id=args.instance or os.environ.get("VOMEHOME_INSTANCE_ID"),
+        vomehome_token=args.token or os.environ.get("VOMEHOME_TOKEN"),
+        api_url=args.api_url,
+        ha_url=args.ha_url or os.environ.get("HA_URL"),
+        ha_token=os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN"),
+    )
+    print(f"listening on http://{args.host}:{args.port}")
+    app.run(host=args.host, port=args.port)
+    return 0
+
+
 def cmd_export(args) -> int:
     session = _load_session(args)
     cloud_devices = session.devices()
@@ -298,6 +314,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-scan", action="store_true", help="skip discovery")
     sp.add_argument("--reveal", action="store_true")
     sp.set_defaults(func=cmd_status)
+
+    sp = sub.add_parser("serve", help="web UI for reviewing and converting devices")
+    sp.add_argument("--host", default="0.0.0.0")  # noqa: S104 - add-on/ingress
+    sp.add_argument("--port", type=int, default=8099)
+    sp.add_argument("--instance", help="VomeHome instance id")
+    sp.add_argument("--token", help="VomeHome token")
+    sp.add_argument("--api-url", default="https://vome.io")
+    sp.add_argument("--ha-url", help="Home Assistant base URL (direct mode)")
+    sp.set_defaults(func=cmd_serve)
 
     sp = sub.add_parser("export", help="emit ready-to-use config for matched devices")
     add_scan_opts(sp)

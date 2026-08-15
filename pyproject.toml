@@ -18,7 +18,8 @@ dependencies = [
 [project.optional-dependencies]
 lan = ["tinytuya>=1.13"]
 qr = ["qrcode[pil]>=7.4"]
-dev = ["pytest>=7", "tinytuya>=1.13", "qrcode[pil]>=7.4"]
+web = ["flask>=3.0"]
+dev = ["pytest>=7", "tinytuya>=1.13", "qrcode[pil]>=7.4", "flask>=3.0"]
 
 [project.scripts]
 tuya-local-bridge = "tuya_local_bridge.cli:main"
