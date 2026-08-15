@@ -161,7 +161,8 @@ call it from unrelated hosted infrastructure.
 
 Verified end to end against a live account and a live Home Assistant: 21 cloud
 devices, 16 discovery flows, reconciled to 11 matched / 3 converted / 7
-cloud-only / 5 lan-only. 41 unit tests.
+cloud-only / 5 lan-only, and a real UDP scan cross-checked against it. The web
+UI renders that live. 69 unit tests.
 
 Not yet done:
 
@@ -173,7 +174,6 @@ Not yet done:
   `entity_id`: free it from the cloud entity, then rename the local one into
   it. `Migration.local_entity_id_original` exists to make that reversible, but
   nothing drives Home Assistant's entity registry yet.
-- Home Assistant add-on packaging and web UI.
 
 ## Licence
 
