@@ -107,3 +107,25 @@ def test_device_normalisation_onto_the_shared_model():
 
 def test_a_device_without_a_key_is_not_convertible():
     assert not _to_cloud_device({"devId": "x", "localKey": ""}).convertible
+
+
+def test_password_encoding_pads_to_the_modulus_width():
+    # Verified against the live API: LEDVANCE returns a 1024-bit modulus with
+    # exponent 3. md5-hex is 32 ASCII bytes (256 bits), so cubing gives 768 bits
+    # = 192 hex chars, and the 64-zero prefix pads that to the full 256.
+    modulus = str((1 << 1023) + 1234567)  # 1024-bit
+    out = _encrypt_password(modulus, "3", "hunter2")
+
+    assert len(out) == 256
+    assert out[:64] == "0" * 64
+
+
+def test_country_code_and_region_reach_the_session():
+    s = VendorSession(VENDORS["ledvance"], "a@b.com", "pw", region="us", country_code=1)
+    assert s.country_code == 1
+    assert "tuyaus" in s.endpoint
+
+
+def test_unknown_region_falls_back_to_eu():
+    s = VendorSession(VENDORS["ledvance"], "a@b.com", "pw", region="mars")
+    assert "tuyaeu" in s.endpoint

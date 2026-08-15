@@ -134,9 +134,8 @@ and never stored.
 
 Two other routes for the same devices, no tooling required:
 
-- The **LEDVANCE/SYLVANIA app shows the local key** in device settings. Note it
-  also shows a *cloud* address — the same WAN trap described below. Get the LAN
-  address from your router or from `scan`.
+- Some builds of the vendor app expose the local key in device settings, but
+  do not count on it — recent LEDVANCE versions do not.
 - **[tuya-cloudcutter](https://github.com/tuya-cloudcutter/tuya-cloudcutter)**
   can detach BK7231/RTL devices from Tuya entirely and flash open firmware. That
   is irreversible and needs a device profile, but it removes the vendor account
@@ -195,9 +194,10 @@ UI renders that live. 69 unit tests.
 
 Not yet done:
 
-- **The vendor-app provider is unverified.** The protocol is implemented
-  faithfully and unit-tested, but nothing has run it against a real LEDVANCE or
-  SYLVANIA account.
+- **The vendor-app login is unverified.** Request signing *is* verified
+  against the live API — both vendors' credentials still authenticate and
+  return an RSA key — but nothing has completed a password login or listed
+  devices on a real account.
 - **The add-on image has not been built.** The manifests are written and
   validated but nothing has run `docker build` against a Home Assistant base
   image, and the Dockerfile installs from git, so the repo must be pushed first.
