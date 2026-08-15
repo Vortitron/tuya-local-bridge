@@ -116,8 +116,8 @@ migration can be rolled back.
 
 ## Running it
 
-Discovery only works from **inside the broadcast domain** — run it on the Home
-Assistant host, not a remote server.
+Only `--source lan` needs to be **inside the broadcast domain**. `--source ha`
+works from anywhere, because Home Assistant did the listening.
 
 The login endpoint is `/v1.0/m/life/home-assistant/qrcode/tokens` and it takes
 Home Assistant's client id. It is a Tuya↔Home Assistant surface, so this is
