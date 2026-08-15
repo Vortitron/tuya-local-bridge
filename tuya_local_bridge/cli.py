@@ -233,6 +233,7 @@ def cmd_serve(args) -> int:
         api_url=args.api_url,
         ha_url=args.ha_url or os.environ.get("HA_URL"),
         ha_token=os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN"),
+        scan_seconds=args.scan_seconds,
     )
     print(f"listening on http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port)
@@ -322,6 +323,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--token", help="VomeHome token")
     sp.add_argument("--api-url", default="https://vome.io")
     sp.add_argument("--ha-url", help="Home Assistant base URL (direct mode)")
+    sp.add_argument(
+        "--scan-seconds",
+        type=int,
+        default=int(os.environ.get("TUYA_LOCAL_BRIDGE_SCAN_SECONDS", "0")),
+        help="also scan the LAN and merge (0 disables; needs host network)",
+    )
     sp.set_defaults(func=cmd_serve)
 
     sp = sub.add_parser("export", help="emit ready-to-use config for matched devices")

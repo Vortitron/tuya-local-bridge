@@ -96,3 +96,11 @@ def test_registry_ignores_malformed_identifiers():
 def test_registry_domain_is_selectable():
     entries = [{"identifiers": [["esphome", "node1"]]}]
     assert parse_device_registry(entries, domain="esphome") == {"node1"}
+
+
+def test_websocket_url_rewriting():
+    from tuya_local_bridge.ha_ws import websocket_url
+
+    assert websocket_url("http://supervisor/core") == "ws://supervisor/core/api/websocket"
+    assert websocket_url("https://ha.example.com/") == "wss://ha.example.com/api/websocket"
+    assert websocket_url("homeassistant:8123") == "ws://homeassistant:8123/api/websocket"

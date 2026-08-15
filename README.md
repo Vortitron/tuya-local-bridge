@@ -62,6 +62,15 @@ Without that bucket it is indistinguishable from one that has gone offline —
 exactly backwards. It is resolved from HA's device registry, where tuya-local
 stores the Tuya device id verbatim.
 
+## Install as a Home Assistant add-on
+
+Add this repository in **Settings → Add-ons → Add-on store → ⋮ → Repositories**,
+install *Tuya Local Bridge*, and open it from the sidebar. It runs on host
+networking so it gets both discovery sources, and uses the Supervisor token —
+no configuration beyond your Smart Life User Code.
+
+See [`addon/`](addon/).
+
 ## Where the LAN half comes from
 
 Two sources, chosen with `--source`:
@@ -87,6 +96,22 @@ user sees in the HA UI.
 
 Its limit is that it only sees flows that are still pending, which is precisely
 why the converted bucket exists.
+
+### Neither source is complete — use both
+
+They fail in opposite directions:
+
+| | Home Assistant discovery | UDP scan |
+| --- | --- | --- |
+| coverage | everything heard since boot | only what is broadcasting now |
+| converted devices | **invisible** (flow consumed) | visible |
+| sleepy battery devices | visible (heard earlier) | **often missed** |
+| protocol version | not carried | yes |
+| flow id for conversion | yes | no |
+
+Measured on one real network: **16 from HA, 15 from a scan, 18 between them.**
+`merge_lan()` unions them — pass HA first so its flow ids survive while the scan
+contributes protocol versions. The add-on does this automatically.
 
 ## The cloud does not give you a usable address
 
@@ -140,9 +165,9 @@ cloud-only / 5 lan-only. 41 unit tests.
 
 Not yet done:
 
-- **`--source lan` is untested on real hardware.** It wraps tinytuya's scanner
-  but has only been exercised against captured output. `--source ha` is the
-  verified path.
+- **The add-on image has not been built.** The manifests are written and
+  validated but nothing has run `docker build` against a Home Assistant base
+  image, and the Dockerfile installs from git, so the repo must be pushed first.
 - **The entity swap.** Adding a tuya-local device creates *new* entities, so
   automations referencing the cloud entity break. The fix is to preserve
   `entity_id`: free it from the cloud entity, then rename the local one into

@@ -60,3 +60,40 @@ def reconcile(
     result.cloud_only.sort(key=lambda c: c.name.lower())
     result.lan_only.sort(key=lambda d: d.ip)
     return result
+
+
+def merge_lan(*sources: Iterable[LanDevice]) -> list[LanDevice]:
+    """Union LAN facts gathered from several discovery sources.
+
+    Neither source is complete, and they fail in opposite directions:
+
+    * Home Assistant's discovery accumulates everything heard since boot, but
+      a device's flow is consumed when it is added — so converted devices
+      vanish from it.
+    * A UDP scan sees everything currently broadcasting, converted devices
+      included, but misses anything asleep during the window (battery sensors
+      especially) and carries no flow id.
+
+    Measured on one real network: 16 from HA, 15 from a scan, 18 between them.
+
+    Later sources *refine* earlier ones rather than replacing them, so pass HA
+    discovery first — the scan then contributes the protocol version, which HA's
+    flow does not carry, while the flow id needed to convert survives in ``raw``.
+    """
+    merged: dict[str, LanDevice] = {}
+    for source in sources:
+        for device in source:
+            if not device.id:
+                continue
+            existing = merged.get(device.id)
+            if existing is None:
+                merged[device.id] = device
+                continue
+            merged[device.id] = LanDevice(
+                id=device.id,
+                ip=device.ip or existing.ip,
+                version=device.version or existing.version,
+                product_key=device.product_key or existing.product_key,
+                raw={**existing.raw, **device.raw},
+            )
+    return sorted(merged.values(), key=lambda d: d.ip)

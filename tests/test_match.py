@@ -102,3 +102,41 @@ def test_converted_ids_we_know_nothing_about_are_ignored():
     result = reconcile([cloud("abc")], [lan("abc", "192.168.1.5")], already_converted={"stale"})
     assert len(result.matched) == 1
     assert result.converted == []
+
+
+def test_merge_unions_sources_that_each_miss_things():
+    from tuya_local_bridge.match import merge_lan
+
+    ha = [lan("a", "192.168.1.5", version=""), lan("sleepy", "192.168.1.9", version="")]
+    scan = [lan("a", "192.168.1.5", version="3.5"), lan("converted", "192.168.1.20")]
+
+    merged = merge_lan(ha, scan)
+
+    assert {d.id for d in merged} == {"a", "sleepy", "converted"}
+
+
+def test_merge_takes_the_version_the_scan_supplies():
+    from tuya_local_bridge.match import merge_lan
+
+    # HA's discovery flow carries no protocol version; the scan does.
+    (dev,) = merge_lan([lan("a", "192.168.1.5", version="")], [lan("a", "192.168.1.5", "3.5")])
+    assert dev.version == "3.5"
+
+
+def test_merge_keeps_the_flow_id_a_later_source_lacks():
+    from tuya_local_bridge.match import merge_lan
+    from tuya_local_bridge.models import LanDevice
+
+    ha = LanDevice(id="a", ip="192.168.1.5", raw={"flow_id": "flow1"})
+    scan = LanDevice(id="a", ip="192.168.1.5", version="3.5", raw={"origin": "broadcast"})
+
+    (dev,) = merge_lan([ha], [scan])
+
+    assert dev.raw["flow_id"] == "flow1"
+    assert dev.raw["origin"] == "broadcast"
+    assert dev.version == "3.5"
+
+
+def test_merge_ignores_records_without_an_id():
+    from tuya_local_bridge.match import merge_lan
+    assert merge_lan([lan("", "192.168.1.5")]) == []

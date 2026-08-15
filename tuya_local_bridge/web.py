@@ -15,10 +15,13 @@ from typing import Any, Optional
 
 from flask import Flask, redirect, render_template_string, request, url_for
 
+import time
+
 from . import cloud as cloud_mod
+from . import discovery as discovery_mod
 from . import ha_discovery
 from .convert import DirectFlowClient, VomeHomeFlowClient, convert
-from .match import reconcile
+from .match import merge_lan, reconcile
 from .store import ProvenanceStore
 
 logger = logging.getLogger(__name__)
@@ -81,11 +84,18 @@ def create_app(
     api_url: str = "https://vome.io",
     ha_url: Optional[str] = None,
     ha_token: Optional[str] = None,
+    scan_seconds: int = 0,
+    scan_cache_seconds: int = 300,
 ) -> Flask:
     """Build the app.
 
     Either give it VomeHome credentials (``instance_id`` + ``vomehome_token``)
     or direct Home Assistant ones (``ha_url`` + ``ha_token``).
+
+    ``scan_seconds`` enables a UDP scan alongside Home Assistant's discovery.
+    The two sources miss different devices, so merging them sees more than
+    either alone — but a scan takes most of a minute, so the result is cached
+    for ``scan_cache_seconds`` and refreshed on demand rather than per request.
     """
     app = Flask(__name__)
     app.config["STATE_DIR"] = state_dir
@@ -100,16 +110,50 @@ def create_app(
             return DirectFlowClient(ha_url, ha_token)
         raise RuntimeError("no Home Assistant credentials configured")
 
-    def discovery():
-        """(devices, flow_id_by_device_id, converted_ids)."""
+    scan_cache: dict[str, Any] = {"at": 0.0, "devices": []}
+
+    def lan_scan(force: bool = False):
+        """Cached UDP scan; empty when scanning is disabled or unavailable."""
+        if scan_seconds <= 0:
+            return []
+        fresh = (time.time() - scan_cache["at"]) < scan_cache_seconds
+        if fresh and not force:
+            return scan_cache["devices"]
+        try:
+            devices = discovery_mod.scan(scan_seconds)
+        except discovery_mod.DiscoveryUnavailable:
+            logger.warning("tinytuya not installed; skipping LAN scan")
+            return []
+        except OSError:
+            # No host network, or broadcast blocked. HA's discovery still works.
+            logger.warning("LAN scan failed; falling back to HA discovery", exc_info=True)
+            return scan_cache["devices"]
+        scan_cache.update(at=time.time(), devices=devices)
+        return devices
+
+    def discovery(force_scan: bool = False):
+        """(devices, flow_id_by_device_id, converted_ids).
+
+        Home Assistant's discovery goes first so its flow ids survive the merge;
+        the scan then refines each record with the protocol version, which HA's
+        flow does not carry.
+        """
         if instance_id and vomehome_token:
-            devices = ha_discovery.from_vomehome(instance_id, vomehome_token, api_url)
+            from_ha = ha_discovery.from_vomehome(instance_id, vomehome_token, api_url)
             converted = ha_discovery.converted_from_vomehome(
                 instance_id, vomehome_token, api_url
             )
         else:
-            devices = ha_discovery.from_home_assistant(ha_url or "", ha_token or "")
-            converted = set()
+            from_ha = ha_discovery.from_home_assistant(ha_url or "", ha_token or "")
+            try:
+                converted = ha_discovery.converted_from_home_assistant(
+                    ha_url or "", ha_token or ""
+                )
+            except Exception:  # noqa: BLE001 - the bucket is a nicety, not essential
+                logger.warning("could not read the device registry", exc_info=True)
+                converted = set()
+
+        devices = merge_lan(from_ha, lan_scan(force=force_scan))
         flows = {d.id: str(d.raw.get("flow_id") or "") for d in devices}
         return devices, flows, converted
 
@@ -177,7 +221,9 @@ def create_app(
 
         session = cloud_mod.TuyaCloudSession.load(session_path)
         cloud_devices = session.devices()
-        lan_devices, flows, converted = discovery()
+        lan_devices, flows, converted = discovery(
+            force_scan=request.args.get("rescan") == "1"
+        )
 
         store = ProvenanceStore(store_path)
         rotated = store.record_cloud(cloud_devices)
@@ -186,7 +232,7 @@ def create_app(
 
         result = reconcile(cloud_devices, lan_devices, already_converted=converted)
         return page(
-            _render_status(result, flows, rotated),
+            _render_status(result, flows, rotated, scan_enabled=scan_seconds > 0),
             f"{session.username or 'connected'} — {len(cloud_devices)} devices on the account",
         )
 
@@ -288,7 +334,9 @@ def _esc(value: Any) -> str:
     )
 
 
-def _render_status(result, flows: dict[str, str], rotated: list[str]) -> str:
+def _render_status(
+    result, flows: dict[str, str], rotated: list[str], *, scan_enabled: bool = False
+) -> str:
     parts: list[str] = []
 
     counts = result.counts
@@ -300,6 +348,11 @@ def _render_status(result, flows: dict[str, str], rotated: list[str]) -> str:
         f'<span class="pill"><b>{counts["lan_only"]}</b> unexplained</span>'
         "</div>"
     )
+
+    if scan_enabled:
+        parts.append(
+            '<p><a href="/?rescan=1">Rescan the network</a> <span class="muted">(takes a moment; results are cached)</span></p>'
+        )
 
     if rotated:
         parts.append(

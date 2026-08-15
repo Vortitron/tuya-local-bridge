@@ -120,6 +120,24 @@ def converted_from_vomehome(
     return parse_device_registry(_unwrap(payload), domain=domain)
 
 
+def converted_from_home_assistant(
+    base_url: str,
+    token: str,
+    *,
+    domain: str = TUYA_LOCAL_DOMAIN,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> set[str]:
+    """Device ids already set up in ``domain``, straight from Home Assistant.
+
+    The device registry is WebSocket-only — there is no REST equivalent — so
+    this is the one call that needs :mod:`tuya_local_bridge.ha_ws`.
+    """
+    from .ha_ws import command  # noqa: PLC0415 - optional dependency
+
+    result = command(base_url, token, {"type": "config/device_registry/list"}, timeout)
+    return parse_device_registry(result or [], domain=domain)
+
+
 def _vomehome_ws(
     instance_id: str,
     token: str,
