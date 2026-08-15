@@ -1,0 +1,14 @@
+# Secrets — local keys and a refresh token granting full control of the home.
+session.json
+provenance.json
+*.tmp
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
