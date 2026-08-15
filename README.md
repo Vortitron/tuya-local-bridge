@@ -187,17 +187,24 @@ call it from unrelated hosted infrastructure.
 
 ## Status
 
-Verified end to end against a live account and a live Home Assistant: 21 cloud
-devices, 16 discovery flows, reconciled to 11 matched / 3 converted / 7
-cloud-only / 5 lan-only, and a real UDP scan cross-checked against it. The web
-UI renders that live. 69 unit tests.
+Verified end to end against live accounts and a live Home Assistant.
+
+The Smart Life account gave 21 devices; Home Assistant's discovery gave 16
+flows; a UDP scan cross-checked both. That reconciled to 11 matched, 3 already
+converted, 7 not discovered — and 5 the account could not explain.
+
+Those five turned out to be LEDVANCE bulbs. Adding the vendor-app provider
+resolved every one of them:
+
+```
+matched 16  |  already converted 3  |  cloud-only 9  |  lan-only 0
+```
+
+An empty lan-only bucket is the goal: every device on the network accounted
+for, and every convertible one holding a usable key. 103 unit tests.
 
 Not yet done:
 
-- **The vendor-app login is unverified.** Request signing *is* verified
-  against the live API — both vendors' credentials still authenticate and
-  return an RSA key — but nothing has completed a password login or listed
-  devices on a real account.
 - **The add-on image has not been built.** The manifests are written and
   validated but nothing has run `docker build` against a Home Assistant base
   image, and the Dockerfile installs from git, so the repo must be pushed first.
