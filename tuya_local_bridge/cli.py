@@ -178,6 +178,11 @@ def cmd_status(args) -> int:
 
     cloud_devices: list[CloudDevice] = session.devices()
     rotated = store.record_cloud(cloud_devices)
+    if args.include_stored:
+        # Keys learned from a vendor app account are not in this session.
+        cloud_devices = cloud_devices + _stored_devices(
+            args, {d.id for d in cloud_devices}
+        )
 
     lan_devices = _lan_devices(args)
     store.record_lan(lan_devices)
@@ -221,6 +226,55 @@ def cmd_status(args) -> int:
     if stale:
         print(f"\n!! {len(stale)} migrated device(s) have unconfirmed keys — re-run to refresh")
     return 0
+
+
+def cmd_vendor(args) -> int:
+    """Fetch local keys from a vendor-branded Tuya app account."""
+    import getpass
+
+    from .vendor import VENDORS, fetch_devices
+
+    if args.vendor not in VENDORS:
+        sys.exit(f"unknown vendor; known: {', '.join(sorted(VENDORS))}")
+
+    email = args.email or input("Account email: ").strip()
+    password = os.environ.get("TUYA_VENDOR_PASSWORD") or getpass.getpass("Password: ")
+
+    devices = fetch_devices(
+        args.vendor, email, password, region=args.region, country_code=args.country_code
+    )
+
+    _, store_path = _paths(args)
+    store = ProvenanceStore(store_path)
+    store.record_cloud(devices)
+    store.save()
+
+    print(f"\n{len(devices)} devices on the {VENDORS[args.vendor].label} account\n")
+    print(f"{'name':<28} {'device id':<24} {'local key':<20} online")
+    for d in sorted(devices, key=lambda x: x.name.lower()):
+        print(
+            f"{d.name[:27]:<28} {d.id:<24} {_mask(d.local_key, args.reveal):<20} "
+            f"{'yes' if d.online else 'no'}"
+        )
+    print(f"\nRecorded in {store_path} — `status --include-stored` will use them.")
+    return 0
+
+
+def _stored_devices(args, known: set) -> list:
+    """Devices whose keys we hold only from a previous vendor lookup."""
+    _, store_path = _paths(args)
+    store = ProvenanceStore(store_path)
+    return [
+        CloudDevice(
+            id=record.device_id,
+            name=record.name or record.device_id,
+            local_key=record.local_key,
+            product_id=record.product_id,
+            category=record.category,
+        )
+        for record in store.devices.values()
+        if record.local_key and record.device_id not in known
+    ]
 
 
 def _registry_and_devices(args):
@@ -420,8 +474,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_scan)
 
+    sp = sub.add_parser(
+        "vendor", help="local keys from a vendor app (LEDVANCE, SYLVANIA, ...)"
+    )
+    sp.add_argument("vendor", help="vendor key, e.g. ledvance")
+    sp.add_argument("--email")
+    sp.add_argument("--region", default="eu", choices=("eu", "us", "cn", "in"))
+    sp.add_argument("--country-code", type=int, default=44)
+    sp.add_argument("--reveal", action="store_true")
+    sp.set_defaults(func=cmd_vendor)
+
     sp = sub.add_parser("status", help="reconcile cloud against LAN")
     add_scan_opts(sp)
+    sp.add_argument(
+        "--include-stored",
+        action="store_true",
+        help="also use keys recorded by a previous `vendor` lookup",
+    )
     sp.add_argument("--no-scan", action="store_true", help="skip discovery")
     sp.add_argument("--reveal", action="store_true")
     sp.set_defaults(func=cmd_status)

@@ -113,6 +113,35 @@ Measured on one real network: **16 from HA, 15 from a scan, 18 between them.**
 `merge_lan()` unions them — pass HA first so its flow ids survive while the scan
 contributes protocol versions. The add-on does this automatically.
 
+## Devices from other brands (LEDVANCE, SYLVANIA, …)
+
+Many "not Tuya" devices are Tuya hardware sold under another brand. They pair
+only in that brand's app, which is a Tuya white-label build with its own app
+credentials — so the Smart Life QR flow cannot see them at all, and they land in
+the **lan-only** bucket. LEDVANCE in particular has moved off the Tuya platform,
+so re-pairing them to Smart Life does not work either.
+
+Those apps use Tuya's older *mobile app* API, which returns `localKey` for an
+email and password:
+
+```bash
+tuya-local-bridge vendor ledvance --email you@example.com
+tuya-local-bridge status --include-stored --source ha --instance <id> --token <t>
+```
+
+The keys are folded into `provenance.json`, so the password is only used once
+and never stored.
+
+Two other routes for the same devices, no tooling required:
+
+- The **LEDVANCE/SYLVANIA app shows the local key** in device settings. Note it
+  also shows a *cloud* address — the same WAN trap described below. Get the LAN
+  address from your router or from `scan`.
+- **[tuya-cloudcutter](https://github.com/tuya-cloudcutter/tuya-cloudcutter)**
+  can detach BK7231/RTL devices from Tuya entirely and flash open firmware. That
+  is irreversible and needs a device profile, but it removes the vendor account
+  from the picture for good.
+
 ## The cloud does not give you a usable address
 
 Every cloud device reports `ip` as your **WAN** address, not a LAN one. Feeding
@@ -166,6 +195,9 @@ UI renders that live. 69 unit tests.
 
 Not yet done:
 
+- **The vendor-app provider is unverified.** The protocol is implemented
+  faithfully and unit-tested, but nothing has run it against a real LEDVANCE or
+  SYLVANIA account.
 - **The add-on image has not been built.** The manifests are written and
   validated but nothing has run `docker build` against a Home Assistant base
   image, and the Dockerfile installs from git, so the repo must be pushed first.
