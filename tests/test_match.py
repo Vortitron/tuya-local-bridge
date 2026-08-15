@@ -15,7 +15,7 @@ def test_matches_on_device_id_not_address():
     c = CloudDevice(id="abc", name="bulb", local_key="k", wan_ip="213.65.215.158")
     result = reconcile([c], [lan("abc", "192.168.1.146")])
 
-    assert result.counts == {"matched": 1, "cloud_only": 0, "lan_only": 0}
+    assert result.counts == {"matched": 1, "cloud_only": 0, "lan_only": 0, "converted": 0}
     assert result.matched[0].config == {
         "device_id": "abc",
         "host": "192.168.1.146",
@@ -75,3 +75,30 @@ def test_results_are_deterministically_ordered():
         [lan("b", "192.168.1.20"), lan("a", "192.168.1.3")],
     )
     assert [m.cloud.name for m in result.matched] == ["alpha", "Zeta"]
+
+
+def test_converted_devices_are_not_reported_as_offline():
+    # Adding a device to tuya-local consumes its discovery flow, so a converted
+    # device is absent from the LAN list. Reporting it as offline is backwards.
+    c = cloud("abc", name="Front Porch")
+    result = reconcile([c], [], already_converted={"abc"})
+
+    assert [d.id for d in result.converted] == ["abc"]
+    assert result.cloud_only == []
+    assert result.matched == []
+
+
+def test_converted_wins_over_a_live_lan_sighting():
+    # If it is both converted and still broadcasting, it is still converted —
+    # and it must not resurface as an unexplained LAN device.
+    result = reconcile([cloud("abc")], [lan("abc", "192.168.1.5")], already_converted={"abc"})
+
+    assert [d.id for d in result.converted] == ["abc"]
+    assert result.matched == []
+    assert result.lan_only == []
+
+
+def test_converted_ids_we_know_nothing_about_are_ignored():
+    result = reconcile([cloud("abc")], [lan("abc", "192.168.1.5")], already_converted={"stale"})
+    assert len(result.matched) == 1
+    assert result.converted == []

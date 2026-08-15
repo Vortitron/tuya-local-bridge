@@ -18,6 +18,7 @@ from typing import Optional
 
 from . import cloud as cloud_mod
 from . import discovery as discovery_mod
+from . import ha_discovery
 from .match import reconcile
 from .models import CloudDevice
 from .store import ProvenanceStore
@@ -31,6 +32,49 @@ STORE_FILE = "provenance.json"
 
 # Keys older than this without cloud confirmation are suspect.
 STALE_KEY_SECONDS = 30 * 24 * 3600
+
+
+def _lan_devices(args):
+    """Resolve the LAN half of the join from whichever source was chosen.
+
+    ``ha`` reads Home Assistant's own tuya-local discovery flows, which works
+    remotely; ``lan`` runs a UDP scan and must be on the broadcast domain.
+    """
+    if getattr(args, "no_scan", False):
+        return []
+
+    source = getattr(args, "source", "lan")
+    if source == "ha":
+        instance = args.instance or os.environ.get("VOMEHOME_INSTANCE_ID")
+        token = args.token or os.environ.get("VOMEHOME_TOKEN")
+        if not instance or not token:
+            sys.exit(
+                "--source ha needs --instance/--token "
+                "(or VOMEHOME_INSTANCE_ID / VOMEHOME_TOKEN)"
+            )
+        return ha_discovery.from_vomehome(instance, token, args.api_url)
+    if source == "ha-direct":
+        url = args.ha_url or os.environ.get("HA_URL")
+        token = args.token or os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
+        if not url or not token:
+            sys.exit("--source ha-direct needs --ha-url/--token (or HA_URL / HA_TOKEN)")
+        return ha_discovery.from_home_assistant(url, token)
+    return discovery_mod.scan(args.seconds, force_subnet_scan=args.force)
+
+
+def _converted_ids(args) -> set[str]:
+    """Device ids tuya-local already owns, when the source can tell us.
+
+    Only the brokered path exposes the device registry today; a LAN scan cannot
+    know, so it returns nothing and those devices simply stay in cloud-only.
+    """
+    if getattr(args, "source", "lan") != "ha":
+        return set()
+    instance = args.instance or os.environ.get("VOMEHOME_INSTANCE_ID")
+    token = args.token or os.environ.get("VOMEHOME_TOKEN")
+    if not instance or not token:
+        return set()
+    return ha_discovery.converted_from_vomehome(instance, token, args.api_url)
 
 
 def _paths(args) -> tuple[str, str]:
@@ -110,7 +154,7 @@ def cmd_cloud(args) -> int:
 
 
 def cmd_scan(args) -> int:
-    devices = discovery_mod.scan(args.seconds, force_subnet_scan=args.force)
+    devices = _lan_devices(args)
     _, store_path = _paths(args)
     store = ProvenanceStore(store_path)
     store.record_lan(devices)
@@ -135,15 +179,15 @@ def cmd_status(args) -> int:
     cloud_devices: list[CloudDevice] = session.devices()
     rotated = store.record_cloud(cloud_devices)
 
-    lan_devices = [] if args.no_scan else discovery_mod.scan(args.seconds, force_subnet_scan=args.force)
+    lan_devices = _lan_devices(args)
     store.record_lan(lan_devices)
     store.save()
 
-    result = reconcile(cloud_devices, lan_devices)
+    result = reconcile(cloud_devices, lan_devices, already_converted=_converted_ids(args))
 
     print(
-        f"\nmatched {len(result.matched)}  |  cloud-only {len(result.cloud_only)}"
-        f"  |  lan-only {len(result.lan_only)}\n"
+        f"\nmatched {len(result.matched)}  |  already converted {len(result.converted)}"
+        f"  |  cloud-only {len(result.cloud_only)}  |  lan-only {len(result.lan_only)}\n"
     )
 
     if result.matched:
@@ -154,6 +198,11 @@ def cmd_status(args) -> int:
                 f"  {m.cloud.name[:25]:<26} {m.lan.ip:<16} {m.cloud.id:<24} "
                 f"{_mask(m.cloud.local_key, args.reveal):<16} {m.lan.version or '?'}"
             )
+
+    if result.converted:
+        print("\nALREADY ON TUYA-LOCAL")
+        for c in result.converted:
+            print(f"  {c.name[:25]:<26} {c.id:<24} {'online' if c.online else 'offline'}")
 
     if result.cloud_only:
         print("\nIN CLOUD, NOT ON LAN  (offline, another subnet, or not local-capable)")
@@ -177,8 +226,8 @@ def cmd_status(args) -> int:
 def cmd_export(args) -> int:
     session = _load_session(args)
     cloud_devices = session.devices()
-    lan_devices = [] if args.no_scan else discovery_mod.scan(args.seconds, force_subnet_scan=args.force)
-    result = reconcile(cloud_devices, lan_devices)
+    lan_devices = _lan_devices(args)
+    result = reconcile(cloud_devices, lan_devices, already_converted=_converted_ids(args))
 
     if args.format == "tinytuya":
         payload = [
@@ -212,6 +261,20 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     def add_scan_opts(sp):
+        sp.add_argument(
+            "--source",
+            choices=("lan", "ha", "ha-direct"),
+            default=os.environ.get("TUYA_LOCAL_BRIDGE_SOURCE", "lan"),
+            help=(
+                "where LAN facts come from: 'lan' scans locally; 'ha' reads Home "
+                "Assistant's discovery via the VomeHome broker (works remotely); "
+                "'ha-direct' reads it straight from Home Assistant"
+            ),
+        )
+        sp.add_argument("--instance", help="VomeHome instance id (--source ha)")
+        sp.add_argument("--token", help="VomeHome or Home Assistant token")
+        sp.add_argument("--api-url", default="https://vome.io", help="VomeHome API base")
+        sp.add_argument("--ha-url", help="Home Assistant base URL (--source ha-direct)")
         sp.add_argument("--seconds", type=int, default=discovery_mod.DEFAULT_SCAN_SECONDS)
         sp.add_argument("--force", action="store_true", help="also probe every subnet address")
 
@@ -225,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_cloud)
 
-    sp = sub.add_parser("scan", help="LAN discovery only")
+    sp = sub.add_parser("scan", help="discovery only, no cloud call")
     add_scan_opts(sp)
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_scan)
@@ -254,7 +317,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     os.makedirs(args.dir, exist_ok=True)
     try:
         return args.func(args)
-    except (cloud_mod.TuyaAuthError, discovery_mod.DiscoveryUnavailable) as exc:
+    except (
+        cloud_mod.TuyaAuthError,
+        discovery_mod.DiscoveryUnavailable,
+        ha_discovery.HaDiscoveryError,
+    ) as exc:
         sys.exit(str(exc))
 
 

@@ -98,11 +98,17 @@ class Reconciliation:
     ``lan_only`` is the interesting bucket: a device broadcasting on the LAN
     that the cloud session cannot explain.  Usually it was re-paired (so any
     cached key is stale) or it belongs to another Tuya account.
+
+    ``converted`` has to be tracked separately because a device that has already
+    been added to tuya-local *stops being discoverable* — its config flow is
+    consumed.  Without this bucket those devices look identical to ones that
+    have gone offline, which is exactly backwards.
     """
 
     matched: list[MatchedDevice] = field(default_factory=list)
     cloud_only: list[CloudDevice] = field(default_factory=list)
     lan_only: list[LanDevice] = field(default_factory=list)
+    converted: list[CloudDevice] = field(default_factory=list)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -110,6 +116,7 @@ class Reconciliation:
             "matched": len(self.matched),
             "cloud_only": len(self.cloud_only),
             "lan_only": len(self.lan_only),
+            "converted": len(self.converted),
         }
 
     def get(self, device_id: str) -> Optional[MatchedDevice]:
