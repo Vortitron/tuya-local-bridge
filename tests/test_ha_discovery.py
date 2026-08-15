@@ -104,3 +104,22 @@ def test_websocket_url_rewriting():
     assert websocket_url("http://supervisor/core") == "ws://supervisor/core/api/websocket"
     assert websocket_url("https://ha.example.com/") == "wss://ha.example.com/api/websocket"
     assert websocket_url("homeassistant:8123") == "ws://homeassistant:8123/api/websocket"
+
+
+def test_map_devices_pairs_cloud_and_local_representations():
+    from tuya_local_bridge.ha_discovery import map_devices
+
+    entries = [
+        {"id": "ha_cloud", "identifiers": [["tuya", "bfa0ad92"]]},
+        {"id": "ha_local", "identifiers": [["tuya_local", "bfa0ad92"]]},
+        {"id": "unrelated", "identifiers": [["hue", "x"]]},
+    ]
+    assert map_devices(entries) == {
+        "bfa0ad92": {"tuya": "ha_cloud", "tuya_local": "ha_local"}
+    }
+
+
+def test_map_devices_skips_entries_without_an_id():
+    from tuya_local_bridge.ha_discovery import map_devices
+
+    assert map_devices([{"identifiers": [["tuya", "abc"]]}]) == {}

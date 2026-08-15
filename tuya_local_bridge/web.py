@@ -407,8 +407,11 @@ def _render_status(
     if result.lan_only:
         parts.append(
             "<h2>On the network, not in your account</h2>"
-            '<p class="muted">Usually reset or re-paired devices — they keep '
-            "broadcasting but belong to nobody, so no key can be found for them.</p>"
+            '<p class="muted">Tuya hardware this account cannot see. Most often '
+            "these are sold under another brand (LEDVANCE and many others) and "
+            "paired in that brand&rsquo;s own app, which is a separate Tuya "
+            "account; sometimes they have simply been reset. Either way no key "
+            "is available here.</p>"
             '<div class="card wrap"><table>'
             + "".join(
                 f"<tr><td><code>{_esc(d.ip)}</code></td><td><code>{_esc(d.id)}</code></td></tr>"

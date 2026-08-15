@@ -105,6 +105,48 @@ def parse_device_registry(
     return converted
 
 
+def map_devices(
+    entries: Iterable[dict[str, Any]],
+    *,
+    domains: tuple[str, ...] = ("tuya", TUYA_LOCAL_DOMAIN),
+) -> dict[str, dict[str, str]]:
+    """Map each Tuya device id to the Home Assistant devices representing it.
+
+    A converted device exists twice — once from the cloud integration and once
+    from tuya-local — both carrying the same Tuya id in their identifiers. That
+    pairing is what makes the entity swap possible.
+    """
+    mapping: dict[str, dict[str, str]] = {}
+    for entry in entries or []:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        for identifier in entry.get("identifiers") or []:
+            if len(identifier) != 2:
+                continue
+            domain, tuya_id = identifier[0], str(identifier[1])
+            if domain in domains and tuya_id:
+                mapping.setdefault(tuya_id, {})[domain] = str(entry["id"])
+    return mapping
+
+
+def device_registry_vomehome(
+    instance_id: str, token: str, api_url: str = "https://vome.io",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> list[dict[str, Any]]:
+    """Raw device registry via the broker."""
+    payload = _vomehome_ws(
+        instance_id, token, api_url, {"type": "config/device_registry/list"}, timeout
+    )
+    return _unwrap(payload)
+
+
+def device_registry_direct(base_url: str, token: str) -> list[dict[str, Any]]:
+    """Raw device registry straight from Home Assistant."""
+    from .ha_ws import command  # noqa: PLC0415
+
+    return command(base_url, token, {"type": "config/device_registry/list"}) or []
+
+
 def converted_from_vomehome(
     instance_id: str,
     token: str,

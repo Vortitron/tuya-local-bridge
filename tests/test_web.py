@@ -48,7 +48,7 @@ def test_unexplained_lan_devices_are_explained_to_the_user():
     result = reconcile([], [lan(id_="ghost", ip="192.168.1.99")])
     html = _render_status(result, {}, [])
     assert "192.168.1.99" in html
-    assert "belong to nobody" in html
+    assert "another brand" in html
 
 
 def test_device_names_are_escaped():

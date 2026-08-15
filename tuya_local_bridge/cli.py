@@ -223,6 +223,116 @@ def cmd_status(args) -> int:
     return 0
 
 
+def _registry_and_devices(args):
+    """(entity registry client, tuya_id -> {domain: ha device id})."""
+    from . import ha_discovery as hd
+    from .swap import DirectEntityRegistry, VomeHomeEntityRegistry
+
+    instance = args.instance or os.environ.get("VOMEHOME_INSTANCE_ID")
+    token = args.token or os.environ.get("VOMEHOME_TOKEN")
+    if instance and token:
+        return (
+            VomeHomeEntityRegistry(instance, token, args.api_url),
+            hd.map_devices(hd.device_registry_vomehome(instance, token, args.api_url)),
+        )
+
+    url = args.ha_url or os.environ.get("HA_URL")
+    ha_token = os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
+    if url and ha_token:
+        return (
+            DirectEntityRegistry(url, ha_token),
+            hd.map_devices(hd.device_registry_direct(url, ha_token)),
+        )
+    sys.exit("need --instance/--token, or --ha-url with HA_TOKEN")
+
+
+def cmd_swap(args) -> int:
+    """Move entity ids from the cloud device onto the local one."""
+    from .swap import apply_swap, entities_for_device, plan_swap
+
+    registry, devices = _registry_and_devices(args)
+    _, store_path = _paths(args)
+    store = ProvenanceStore(store_path)
+    entities = registry.list_entities()
+
+    convertible = sorted(
+        d for d, m in devices.items() if "tuya" in m and "tuya_local" in m
+    )
+    targets = args.device_id or (convertible if args.all else [])
+    if not targets:
+        if not convertible:
+            print("nothing converted yet — no device has both a cloud and a local entry")
+            return 0
+        # Defaulting to "everything" is dangerous: a device converted by hand
+        # months ago may already have curated entity ids that a swap would undo.
+        print("Devices with both a cloud and a local entry:\n")
+        for tuya_id in convertible:
+            print(f"  {tuya_id}")
+        print(
+            "\nName the ones to swap, or pass --all. Try --dry-run first: if you "
+            "converted a device by hand and renamed its entities, swapping will "
+            "replace those names with the cloud ids."
+        )
+        return 0
+
+    changed = False
+    for tuya_id in targets:
+        mapping = devices.get(tuya_id) or {}
+        if "tuya" not in mapping or "tuya_local" not in mapping:
+            print(f"{tuya_id}: skipped (needs both a cloud and a local device)")
+            continue
+
+        plan = plan_swap(
+            entities_for_device(entities, mapping["tuya"]),
+            entities_for_device(entities, mapping["tuya_local"]),
+        )
+        print(f"\n{tuya_id}")
+        for pair in plan.pairs:
+            print(f"  {pair.local_entity_id}  ->  {pair.cloud_entity_id}")
+        for entity_id in plan.cloud_unmatched:
+            # Worth calling out: anything left here keeps pointing at the cloud,
+            # so automations using it stay on the cloud path.
+            print(f"  !! {entity_id}: no local counterpart — stays on the cloud")
+
+        if plan.is_empty:
+            continue
+        if args.dry_run:
+            continue
+
+        for result in apply_swap(registry, plan, store, tuya_id):
+            changed = True
+            mark = "ok" if result.ok else "FAILED"
+            print(f"  {mark}: {result.entity_id} ({result.detail})")
+
+    if changed:
+        store.save()
+    elif args.dry_run:
+        print("\n(dry run — nothing changed; drop --dry-run to apply)")
+    return 0
+
+
+def cmd_rollback(args) -> int:
+    """Undo a swap, putting the cloud entity ids back."""
+    from .swap import rollback
+
+    registry, _ = _registry_and_devices(args)
+    _, store_path = _paths(args)
+    store = ProvenanceStore(store_path)
+
+    targets = args.device_id or [
+        d for d, r in store.devices.items() if r.active_migration is not None
+    ]
+    if not targets:
+        print("nothing to roll back")
+        return 0
+
+    for tuya_id in targets:
+        for result in rollback(registry, store, tuya_id):
+            print(f"{'ok' if result.ok else 'FAILED'}: {result.entity_id} ({result.detail})")
+    store.save()
+    return 0
+
+
 def cmd_serve(args) -> int:
     from .web import create_app  # imported lazily: Flask is an optional extra
 
@@ -315,6 +425,26 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-scan", action="store_true", help="skip discovery")
     sp.add_argument("--reveal", action="store_true")
     sp.set_defaults(func=cmd_status)
+
+    def add_ha_opts(sp):
+        sp.add_argument("--instance", help="VomeHome instance id")
+        sp.add_argument("--token", help="VomeHome token")
+        sp.add_argument("--api-url", default="https://vome.io")
+        sp.add_argument("--ha-url", help="Home Assistant base URL (direct mode)")
+
+    sp = sub.add_parser(
+        "swap", help="give the local entities the cloud entities' ids"
+    )
+    add_ha_opts(sp)
+    sp.add_argument("device_id", nargs="*", help="Tuya device ids (default: all converted)")
+    sp.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
+    sp.add_argument("--all", action="store_true", help="every converted device")
+    sp.set_defaults(func=cmd_swap)
+
+    sp = sub.add_parser("rollback", help="undo a swap")
+    add_ha_opts(sp)
+    sp.add_argument("device_id", nargs="*", help="Tuya device ids (default: all swapped)")
+    sp.set_defaults(func=cmd_rollback)
 
     sp = sub.add_parser("serve", help="web UI for reviewing and converting devices")
     sp.add_argument("--host", default="0.0.0.0")  # noqa: S104 - add-on/ingress

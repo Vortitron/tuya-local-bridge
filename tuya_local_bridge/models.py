@@ -96,8 +96,10 @@ class Reconciliation:
     """The three-way split that drives the UI.
 
     ``lan_only`` is the interesting bucket: a device broadcasting on the LAN
-    that the cloud session cannot explain.  Usually it was re-paired (so any
-    cached key is stale) or it belongs to another Tuya account.
+    that the cloud session cannot explain.  Most often it is Tuya hardware sold
+    under another brand and paired in that brand's own app — a separate Tuya
+    account we cannot read — or a device that was reset or re-paired, in which
+    case any cached key is stale.
 
     ``converted`` has to be tracked separately because a device that has already
     been added to tuya-local *stops being discoverable* — its config flow is
