@@ -387,6 +387,67 @@ def cmd_rollback(args) -> int:
     return 0
 
 
+def cmd_heal(args) -> int:
+    """Detect and repair tuya-local entries whose config has drifted."""
+    from . import ha_discovery as hd
+    from .heal import DirectOptionsFlowClient, HealError, detect_drift, entry_ids_for_devices, repair
+
+    session = _load_session(args)
+    _, store_path = _paths(args)
+    store = ProvenanceStore(store_path)
+
+    cloud_devices = session.devices()
+    if args.include_stored:
+        cloud_devices = cloud_devices + _stored_devices(args, {d.id for d in cloud_devices})
+    lan_devices = _lan_devices(args)
+
+    instance = args.instance or os.environ.get("VOMEHOME_INSTANCE_ID")
+    token = args.token or os.environ.get("VOMEHOME_TOKEN")
+    ha_url = args.ha_url or os.environ.get("HA_URL")
+    ha_token = os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
+
+    if instance and token:
+        registry = hd.device_registry_vomehome(instance, token, args.api_url)
+    elif ha_url and ha_token:
+        registry = hd.device_registry_direct(ha_url, ha_token)
+    else:
+        sys.exit("need --instance/--token, or --ha-url with HA_TOKEN")
+
+    drifts = detect_drift(
+        cloud_devices, lan_devices, store, entry_ids_for_devices(registry)
+    )
+    if not drifts:
+        print("nothing has drifted — every converted entry matches what we can see")
+        return 0
+
+    print(f"{len(drifts)} entr{'y' if len(drifts) == 1 else 'ies'} out of date\n")
+    for drift in drifts:
+        print(f"  {drift.name or drift.device_id}: {drift.describe()}")
+
+    if args.dry_run:
+        print("\n(dry run — drop --dry-run to repair)")
+        return 0
+    if not (ha_url and ha_token):
+        print(
+            "\nRepair needs Home Assistant's options-flow API, which the VomeHome "
+            "broker does not route yet. Re-run with --ha-url and HA_TOKEN, or from "
+            "the add-on."
+        )
+        return 1
+
+    client = DirectOptionsFlowClient(ha_url, ha_token)
+    print()
+    for drift in drifts:
+        try:
+            print(f"  {drift.name or drift.device_id}: {repair(client, drift)}")
+        except HealError as exc:
+            print(f"  FAILED {exc}")
+    store.record_cloud(cloud_devices)
+    store.record_lan(lan_devices)
+    store.save()
+    return 0
+
+
 def cmd_serve(args) -> int:
     from .web import create_app  # imported lazily: Flask is an optional extra
 
@@ -500,6 +561,14 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--token", help="VomeHome token")
         sp.add_argument("--api-url", default="https://vome.io")
         sp.add_argument("--ha-url", help="Home Assistant base URL (direct mode)")
+
+    sp = sub.add_parser(
+        "heal", help="re-sync entries whose address, key or protocol has moved"
+    )
+    add_scan_opts(sp)
+    sp.add_argument("--include-stored", action="store_true")
+    sp.add_argument("--dry-run", action="store_true")
+    sp.set_defaults(func=cmd_heal)
 
     sp = sub.add_parser(
         "swap", help="give the local entities the cloud entities' ids"

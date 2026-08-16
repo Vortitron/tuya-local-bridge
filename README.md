@@ -157,6 +157,33 @@ discovery:  device_id -> 192.168.x.y      (no key)
 Devices are joined on Tuya device id, never on address — ids are stable across
 DHCP changes.
 
+## When a device stops responding
+
+A tuya-local entry pins three things that are not constant:
+
+- the **address**, which DHCP can move — a reservation makes that unlikely, not
+  impossible;
+- the **local key**, which rotates whenever the device is re-paired;
+- the **protocol version**, which can change across firmware updates.
+
+All three fail identically: the device stops responding, often months later,
+with nothing in the log naming the cause. The repair is the same in each case —
+re-submit what we can re-derive:
+
+```bash
+tuya-local-bridge heal --dry-run     # what has moved
+tuya-local-bridge heal               # re-sync it
+```
+
+Discovery supplies the current address and protocol version, the account
+supplies the current key, and the provenance store says what the entry was
+configured with — so the difference *is* the staleness. This is why every
+observation is timestamped rather than overwritten.
+
+Repair needs Home Assistant's options-flow API, which the VomeHome broker does
+not route yet, so it runs in direct mode (the add-on, or `--ha-url` with
+`HA_TOKEN`). Detection works everywhere.
+
 ## Local keys are cached state, not configuration
 
 Every observation is timestamped in `provenance.json`. A changed key bumps
