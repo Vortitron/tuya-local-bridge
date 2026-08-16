@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 from urllib.parse import quote
 
 import requests
@@ -76,8 +76,8 @@ def convert(
     device: MatchedDevice,
     flow_id: str,
     *,
-    device_type: Optional[str] = None,
-    protocol_version: Optional[str] = None,
+    device_type: str | None = None,
+    protocol_version: str | None = None,
     poll_only: bool = False,
 ) -> ConversionResult:
     """Advance one device's discovery flow as far as it will go.

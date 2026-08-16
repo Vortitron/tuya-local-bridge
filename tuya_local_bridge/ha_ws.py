@@ -47,7 +47,7 @@ def command(
     liability rather than a saving.
     """
     try:
-        import websocket  # noqa: PLC0415 - optional, only for direct mode
+        import websocket
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise HaWebSocketError(
             "websocket-client is required for direct Home Assistant access: "
@@ -81,5 +81,5 @@ def command(
     finally:
         try:
             connection.close()
-        except Exception:  # noqa: BLE001 - closing must not mask the real error
+        except Exception:
             logger.debug("error closing websocket", exc_info=True)

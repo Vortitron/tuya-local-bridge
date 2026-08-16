@@ -1,4 +1,3 @@
-import pytest
 
 from tuya_local_bridge.store import ProvenanceStore
 from tuya_local_bridge.swap import (

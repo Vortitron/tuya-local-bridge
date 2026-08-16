@@ -13,8 +13,6 @@ import json
 import logging
 import os
 import sys
-import time
-from typing import Optional
 
 from . import cloud as cloud_mod
 from . import discovery as discovery_mod
@@ -99,7 +97,7 @@ def _render_qr(challenge: cloud_mod.QRChallenge) -> None:
     """Print the QR to the terminal, and save a PNG when possible."""
     print("\nScan with Smart Life / Tuya Smart  (Me -> scan icon, top right)\n")
     try:
-        import qrcode  # noqa: PLC0415 - optional nicety
+        import qrcode
 
         qr = qrcode.QRCode(border=2, error_correction=qrcode.constants.ERROR_CORRECT_L)
         qr.add_data(challenge.payload)
@@ -390,7 +388,13 @@ def cmd_rollback(args) -> int:
 def cmd_heal(args) -> int:
     """Detect and repair tuya-local entries whose config has drifted."""
     from . import ha_discovery as hd
-    from .heal import DirectOptionsFlowClient, HealError, detect_drift, entry_ids_for_devices, repair
+    from .heal import (
+        DirectOptionsFlowClient,
+        HealError,
+        detect_drift,
+        entry_ids_for_devices,
+        repair,
+    )
 
     session = _load_session(args)
     _, store_path = _paths(args)
@@ -585,7 +589,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_rollback)
 
     sp = sub.add_parser("serve", help="web UI for reviewing and converting devices")
-    sp.add_argument("--host", default="0.0.0.0")  # noqa: S104 - add-on/ingress
+    sp.add_argument("--host", default="0.0.0.0")
     sp.add_argument("--port", type=int, default=8099)
     sp.add_argument("--instance", help="VomeHome instance id")
     sp.add_argument("--token", help="VomeHome token")
@@ -608,7 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,

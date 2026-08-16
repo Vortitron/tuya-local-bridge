@@ -11,7 +11,7 @@ Home Assistant host, not on a remote server.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from .models import LanDevice
 
@@ -40,7 +40,7 @@ def scan(
     VLANs or AP isolation) at the cost of being much slower and noisier.
     """
     try:
-        import tinytuya  # noqa: PLC0415 - optional, and only needed on the LAN
+        import tinytuya
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise DiscoveryUnavailable(
             "tinytuya is required for LAN discovery: pip install tinytuya"
@@ -82,7 +82,7 @@ def _normalise(found: dict[str, Any]) -> list[LanDevice]:
     return devices
 
 
-def _version_str(version: Optional[Any]) -> str:
+def _version_str(version: Any | None) -> str:
     if version in (None, ""):
         return ""
     return str(version)

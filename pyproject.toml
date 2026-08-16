@@ -29,3 +29,19 @@ include = ["tuya_local_bridge*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+# Correctness and tidiness, not style preferences: pyflakes, import order,
+# bugbear, comprehensions, and the pyupgrade rules that matter at 3.10.
+select = ["F", "E", "W", "I", "B", "C4", "UP", "RUF"]
+ignore = [
+    "E501",   # line length is handled by the formatter, not by failing builds
+    "B008",   # calls in argument defaults are deliberate in the CLI wiring
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

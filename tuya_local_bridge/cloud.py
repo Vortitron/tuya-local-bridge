@@ -23,7 +23,7 @@ import os
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import requests
 from tuya_sharing.customerapi import CustomerApi, CustomerTokenInfo, SharingTokenListener
@@ -72,7 +72,7 @@ def request_qr(user_code: str) -> QRChallenge:
     return QRChallenge(token=resp["result"]["qrcode"])
 
 
-def poll_login(user_code: str, challenge: QRChallenge) -> Optional[dict[str, Any]]:
+def poll_login(user_code: str, challenge: QRChallenge) -> dict[str, Any] | None:
     """Check whether the QR has been scanned yet.
 
     Returns the token bundle on success, ``None`` while still waiting.  Tuya
@@ -100,7 +100,7 @@ class _PersistingTokenListener(SharingTokenListener):
     persistence has to happen at the moment of refresh.
     """
 
-    def __init__(self, session: "TuyaCloudSession"):
+    def __init__(self, session: TuyaCloudSession):
         self._session = session
 
     def update_token(self, token_info: dict[str, Any]) -> None:
@@ -111,19 +111,19 @@ class _PersistingTokenListener(SharingTokenListener):
 class TuyaCloudSession:
     """An authenticated device-sharing session, persisted to disk."""
 
-    def __init__(self, token_info: dict[str, Any], path: Optional[str] = None):
+    def __init__(self, token_info: dict[str, Any], path: str | None = None):
         self.token_info = dict(token_info)
         self.path = path
-        self._api: Optional[CustomerApi] = None
+        self._api: CustomerApi | None = None
 
     # ── persistence ────────────────────────────────────────────────────────
 
     @classmethod
-    def load(cls, path: str) -> "TuyaCloudSession":
+    def load(cls, path: str) -> TuyaCloudSession:
         with open(path) as fh:
             return cls(json.load(fh), path=path)
 
-    def save(self, path: Optional[str] = None) -> None:
+    def save(self, path: str | None = None) -> None:
         target = path or self.path
         if not target:
             raise ValueError("no path to save session to")

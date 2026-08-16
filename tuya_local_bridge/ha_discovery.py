@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 from urllib.parse import quote
 
 import requests
@@ -40,7 +41,7 @@ class HaDiscoveryError(RuntimeError):
 def parse_flows(
     flows: Iterable[dict[str, Any]],
     *,
-    handler: Optional[str] = TUYA_LOCAL_DOMAIN,
+    handler: str | None = TUYA_LOCAL_DOMAIN,
 ) -> list[LanDevice]:
     """Turn in-progress config flows into :class:`LanDevice` values.
 
@@ -142,7 +143,7 @@ def device_registry_vomehome(
 
 def device_registry_direct(base_url: str, token: str) -> list[dict[str, Any]]:
     """Raw device registry straight from Home Assistant."""
-    from .ha_ws import command  # noqa: PLC0415
+    from .ha_ws import command
 
     return command(base_url, token, {"type": "config/device_registry/list"}) or []
 
@@ -174,7 +175,7 @@ def converted_from_home_assistant(
     The device registry is WebSocket-only — there is no REST equivalent — so
     this is the one call that needs :mod:`tuya_local_bridge.ha_ws`.
     """
-    from .ha_ws import command  # noqa: PLC0415 - optional dependency
+    from .ha_ws import command
 
     result = command(base_url, token, {"type": "config/device_registry/list"}, timeout)
     return parse_device_registry(result or [], domain=domain)
@@ -207,7 +208,7 @@ def from_vomehome(
     token: str,
     api_url: str = "https://vome.io",
     *,
-    handler: Optional[str] = TUYA_LOCAL_DOMAIN,
+    handler: str | None = TUYA_LOCAL_DOMAIN,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> list[LanDevice]:
     """Read discovery flows through the VomeHome broker.
@@ -226,7 +227,7 @@ def from_home_assistant(
     base_url: str,
     token: str,
     *,
-    handler: Optional[str] = TUYA_LOCAL_DOMAIN,
+    handler: str | None = TUYA_LOCAL_DOMAIN,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> list[LanDevice]:
     """Read discovery flows straight from Home Assistant's REST API.

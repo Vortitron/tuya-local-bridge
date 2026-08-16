@@ -8,7 +8,7 @@ no key.  Joining them is the whole point of this package.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ class CloudDevice:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, item: dict[str, Any]) -> "CloudDevice":
+    def from_api(cls, item: dict[str, Any]) -> CloudDevice:
         return cls(
             id=item.get("id", ""),
             name=item.get("name", ""),
@@ -121,7 +121,7 @@ class Reconciliation:
             "converted": len(self.converted),
         }
 
-    def get(self, device_id: str) -> Optional[MatchedDevice]:
+    def get(self, device_id: str) -> MatchedDevice | None:
         for m in self.matched:
             if m.id == device_id:
                 return m

@@ -15,15 +15,16 @@ import json
 import os
 import tempfile
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any
 
 from .models import CloudDevice, LanDevice
 
 SCHEMA_VERSION = 1
 
 
-def _now(now: Optional[float] = None) -> float:
+def _now(now: float | None = None) -> float:
     """Resolve a timestamp, treating an explicit 0.0 as a real value."""
     return time.time() if now is None else now
 
@@ -38,7 +39,7 @@ class Migration:
     # The entity_id the local entity was originally given, before we renamed it
     # into the cloud entity's slot. Needed to put things back.
     local_entity_id_original: str = ""
-    rolled_back_at: Optional[float] = None
+    rolled_back_at: float | None = None
 
 
 @dataclass
@@ -51,22 +52,22 @@ class DeviceRecord:
     key_generation: int = 1
     key_first_seen: float = 0.0
     key_last_confirmed: float = 0.0
-    key_rotated_at: Optional[float] = None
+    key_rotated_at: float | None = None
     last_lan_ip: str = ""
-    last_seen_on_lan: Optional[float] = None
+    last_seen_on_lan: float | None = None
     protocol_version: str = ""
     product_id: str = ""
     category: str = ""
     migrations: list[Migration] = field(default_factory=list)
 
     @property
-    def active_migration(self) -> Optional[Migration]:
+    def active_migration(self) -> Migration | None:
         for m in reversed(self.migrations):
             if m.rolled_back_at is None:
                 return m
         return None
 
-    def age_of_key(self, now: Optional[float] = None) -> float:
+    def age_of_key(self, now: float | None = None) -> float:
         """Seconds since the cloud last confirmed this key."""
         return _now(now) - (self.key_last_confirmed or 0.0)
 
@@ -118,7 +119,7 @@ class ProvenanceStore:
 
     # ── observation ────────────────────────────────────────────────────────
 
-    def record_cloud(self, devices: Iterable[CloudDevice], now: Optional[float] = None) -> list[str]:
+    def record_cloud(self, devices: Iterable[CloudDevice], now: float | None = None) -> list[str]:
         """Fold a cloud sync into the store; return ids whose key rotated."""
         now = _now(now)
         rotated: list[str] = []
@@ -153,7 +154,7 @@ class ProvenanceStore:
 
         return rotated
 
-    def record_lan(self, devices: Iterable[LanDevice], now: Optional[float] = None) -> None:
+    def record_lan(self, devices: Iterable[LanDevice], now: float | None = None) -> None:
         """Fold a LAN scan into the store."""
         now = _now(now)
         for dev in devices:
@@ -172,7 +173,7 @@ class ProvenanceStore:
         cloud_entity_id: str,
         local_entity_id: str,
         local_entity_id_original: str = "",
-        now: Optional[float] = None,
+        now: float | None = None,
     ) -> Migration:
         rec = self.devices.get(device_id)
         if rec is None:
@@ -186,7 +187,7 @@ class ProvenanceStore:
         rec.migrations.append(migration)
         return migration
 
-    def record_rollback(self, device_id: str, now: Optional[float] = None) -> Optional[Migration]:
+    def record_rollback(self, device_id: str, now: float | None = None) -> Migration | None:
         rec = self.devices.get(device_id)
         migration = rec.active_migration if rec else None
         if migration is not None:
@@ -195,7 +196,7 @@ class ProvenanceStore:
 
     # ── queries ────────────────────────────────────────────────────────────
 
-    def stale_keys(self, max_age_seconds: float, now: Optional[float] = None) -> list[DeviceRecord]:
+    def stale_keys(self, max_age_seconds: float, now: float | None = None) -> list[DeviceRecord]:
         """Migrated devices whose key has not been re-confirmed recently.
 
         These are the candidates for silent breakage.
@@ -207,7 +208,7 @@ class ProvenanceStore:
             if r.active_migration is not None and r.age_of_key(now) > max_age_seconds
         ]
 
-    def get(self, device_id: str) -> Optional[DeviceRecord]:
+    def get(self, device_id: str) -> DeviceRecord | None:
         return self.devices.get(device_id)
 
     def as_dict(self) -> dict[str, Any]:

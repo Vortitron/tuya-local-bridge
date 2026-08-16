@@ -28,8 +28,9 @@ Anything that does not pair unambiguously is reported, never guessed at.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional, Protocol
+from typing import Any, Protocol
 
 from .store import ProvenanceStore
 
@@ -59,7 +60,7 @@ class EntityPair:
     cloud_entity_id: str
     local_entity_id: str
     domain: str
-    name: Optional[str]
+    name: str | None
 
     @property
     def parked_entity_id(self) -> str:
@@ -183,7 +184,7 @@ def apply_swap(
                 new_entity_id=pair.parked_entity_id,
                 disabled_by="user",
             )
-        except Exception as exc:  # noqa: BLE001 - reported per entity
+        except Exception as exc:
             logger.exception("could not park %s", pair.cloud_entity_id)
             results.append(SwapResult(pair.cloud_entity_id, "error", str(exc)))
             continue
@@ -192,7 +193,7 @@ def apply_swap(
             registry.update_entity(
                 pair.local_entity_id, new_entity_id=pair.cloud_entity_id
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("could not rename %s; undoing", pair.local_entity_id)
             try:
                 registry.update_entity(
@@ -200,7 +201,7 @@ def apply_swap(
                     new_entity_id=pair.cloud_entity_id,
                     disabled_by=None,
                 )
-            except Exception:  # noqa: BLE001 - nothing more we can do
+            except Exception:
                 logger.exception("could not restore %s", pair.cloud_entity_id)
             results.append(SwapResult(pair.local_entity_id, "error", str(exc)))
             continue
@@ -243,7 +244,7 @@ def rollback(
             registry.update_entity(
                 parked, new_entity_id=cloud_entity_id, disabled_by=None
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("rollback failed for %s", cloud_entity_id)
             results.append(SwapResult(cloud_entity_id, "error", str(exc)))
             continue

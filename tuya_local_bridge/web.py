@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+import time
+from typing import Any
 
 from flask import Flask, redirect, render_template_string, request, url_for
-
-import time
 
 from . import cloud as cloud_mod
 from . import discovery as discovery_mod
@@ -79,11 +78,11 @@ PAGE = """<!doctype html>
 def create_app(
     state_dir: str,
     *,
-    instance_id: Optional[str] = None,
-    vomehome_token: Optional[str] = None,
+    instance_id: str | None = None,
+    vomehome_token: str | None = None,
     api_url: str = "https://vome.io",
-    ha_url: Optional[str] = None,
-    ha_token: Optional[str] = None,
+    ha_url: str | None = None,
+    ha_token: str | None = None,
     scan_seconds: int = 0,
     scan_cache_seconds: int = 300,
 ) -> Flask:
@@ -149,7 +148,7 @@ def create_app(
                 converted = ha_discovery.converted_from_home_assistant(
                     ha_url or "", ha_token or ""
                 )
-            except Exception:  # noqa: BLE001 - the bucket is a nicety, not essential
+            except Exception:
                 logger.warning("could not read the device registry", exc_info=True)
                 converted = set()
 
@@ -260,7 +259,7 @@ def create_app(
                 continue
             try:
                 outcome = convert(client, matched, flow_id)
-            except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            except Exception as exc:
                 logger.exception("conversion failed for %s", matched.id)
                 failed.append((matched, str(exc)))
                 continue
@@ -294,7 +293,7 @@ def create_app(
                 continue
             try:
                 outcome = convert(client, matched, flow_id, device_type=device_type)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.exception("conversion failed for %s", device_id)
                 failed.append((device_id, str(exc)))
                 continue
@@ -476,7 +475,7 @@ def _qr_svg(payload: str, scale: int = 6) -> str:
     Inline rather than a data: URI so it survives the strictest ingress CSP.
     """
     try:
-        import qrcode  # noqa: PLC0415
+        import qrcode
     except ImportError:
         return f"<p>Install <code>qrcode</code> to display this.</p><p><code>{_esc(payload)}</code></p>"
 

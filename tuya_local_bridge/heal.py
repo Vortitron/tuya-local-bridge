@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional, Protocol
+from typing import Any, Protocol
 from urllib.parse import quote
 
 import requests

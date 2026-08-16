@@ -26,7 +26,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import requests
 
@@ -140,7 +140,7 @@ class VendorSession:
         self.country_code = country_code
         self.timeout = timeout
         self.session = requests.Session()
-        self.sid: Optional[str] = None
+        self.sid: str | None = None
 
     # ── signing / transport ────────────────────────────────────────────────
 
@@ -160,10 +160,10 @@ class VendorSession:
     def _call(
         self,
         action: str,
-        post_data: Optional[dict[str, Any]] = None,
+        post_data: dict[str, Any] | None = None,
         *,
         requires_sid: bool = True,
-        extra: Optional[dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> Any:
         if requires_sid and not self.sid:
             raise VendorApiError("not logged in")
@@ -221,7 +221,7 @@ class VendorSession:
 
     # ── api ────────────────────────────────────────────────────────────────
 
-    def login(self) -> "VendorSession":
+    def login(self) -> VendorSession:
         token = self._call(
             "tuya.m.user.email.token.create",
             {"countryCode": self.country_code, "email": self.email},
