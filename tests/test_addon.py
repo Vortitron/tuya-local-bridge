@@ -32,7 +32,7 @@ def test_the_addon_start_command_parses():
     assert args.command == "serve"
     assert args.dir == "/data"
     assert args.port == 8099
-    assert args.host == "0.0.0.0"  # noqa: S104 - ingress fronts this
+    assert args.host == "0.0.0.0"
 
 
 @pytest.mark.skipif(not RUN_SH.exists(), reason="add-on not present")
