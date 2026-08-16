@@ -5,14 +5,14 @@ def test_normalises_tinytuya_scan_output():
     found = {
         "192.168.1.146": {
             "ip": "192.168.1.146",
-            "gwId": "bf9986ce08f32502cbglz1",
+            "gwId": "bf1000aa2000bb3000ccd1",
             "version": 3.5,
             "productKey": "xibcsv6dp3ajzth9",
         }
     }
     (dev,) = _normalise(found)
 
-    assert dev.id == "bf9986ce08f32502cbglz1"
+    assert dev.id == "bf1000aa2000bb3000ccd1"
     assert dev.ip == "192.168.1.146"
     assert dev.version == "3.5"  # normalised from a float
 

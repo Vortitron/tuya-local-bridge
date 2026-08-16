@@ -4,7 +4,7 @@ FLOW = {
     "context": {
         "source": "integration_discovery",
         "title_placeholders": {"name": "192.168.1.146"},
-        "unique_id": "bf9986ce08f32502cbglz1",
+        "unique_id": "bf1000aa2000bb3000ccd1",
     },
     "flow_id": "01KYMPBMX2AAK02YN74X1P1AT9",
     "handler": "tuya_local",
@@ -14,7 +14,7 @@ FLOW = {
 
 def test_parses_a_real_tuya_local_discovery_flow():
     (dev,) = parse_flows([FLOW])
-    assert dev.id == "bf9986ce08f32502cbglz1"
+    assert dev.id == "bf1000aa2000bb3000ccd1"
     assert dev.ip == "192.168.1.146"
     # HA's flow does not carry the protocol version; tuya-local probes for it.
     assert dev.version == ""
@@ -72,10 +72,10 @@ def test_unwrap_gives_up_rather_than_looping_forever():
 
 def test_parses_tuya_local_devices_out_of_the_registry():
     entries = [
-        {"name": "Front Porch Local", "identifiers": [["tuya_local", "bfa0ad92d1a9e36c1cqmlb"]]},
+        {"name": "Front Porch Local", "identifiers": [["tuya_local", "bf2000dd4000ee5000ffg2"]]},
         {"name": "Some Hue Lamp", "identifiers": [["hue", "00:17:88:01"]]},
     ]
-    assert parse_device_registry(entries) == {"bfa0ad92d1a9e36c1cqmlb"}
+    assert parse_device_registry(entries) == {"bf2000dd4000ee5000ffg2"}
 
 
 def test_registry_entry_with_several_identifiers():

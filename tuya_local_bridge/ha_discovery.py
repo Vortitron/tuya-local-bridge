@@ -48,7 +48,7 @@ def parse_flows(
 
         {"handler": "tuya_local", "step_id": "local",
          "context": {"source": "integration_discovery",
-                     "unique_id": "bf9986ce08f32502cbglz1",
+                     "unique_id": "bf1000aa2000bb3000ccd1",
                      "title_placeholders": {"name": "192.168.1.146"}}}
 
     ``unique_id`` is the Tuya device id and ``title_placeholders.name`` is the

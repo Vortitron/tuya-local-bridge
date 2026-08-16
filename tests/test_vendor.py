@@ -90,14 +90,14 @@ def test_unknown_vendor_is_rejected_with_the_known_list():
 def test_device_normalisation_onto_the_shared_model():
     device = _to_cloud_device(
         {
-            "devId": "bf545a49de3bb330e8jfsb",
+            "devId": "bf3000hh6000jj7000kkm3",
             "name": "Kitchen bulb",
             "localKey": "abc123",
             "isOnline": True,
             "productId": "keytg5kq8gvkv9dh",
         }
     )
-    assert device.id == "bf545a49de3bb330e8jfsb"
+    assert device.id == "bf3000hh6000jj7000kkm3"
     assert device.local_key == "abc123"
     assert device.online is True
     assert device.convertible
