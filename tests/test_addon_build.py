@@ -77,3 +77,43 @@ def test_a_version_bump_alone_invalidates_the_layer():
     assert install, 'no install step found'
     block = dockerfile.split('RUN')[-2] if 'RUN' in dockerfile else dockerfile
     assert 'BUILD_VERSION' in dockerfile
+
+
+def _dockerfile_ref() -> str:
+    for line in (ADDON / 'Dockerfile').read_text().splitlines():
+        if line.startswith('ARG BRIDGE_REF='):
+            return line.split('=', 1)[1].strip()
+    raise AssertionError('the Dockerfile must pin BRIDGE_REF')
+
+
+def test_the_pinned_commit_carries_this_version():
+    """The pin must not lag the version it claims to build.
+
+    The add-on installs the package from a git ref, so the version in
+    config.yaml and the code that ships are set in two different places. Bump
+    one and forget the other and Supervisor reports the new version while
+    running the old code -- which happened once already, when 0.1.2 shipped
+    byte-identical to 0.1.1 and cost a round of "updated and exactly the same
+    issue".
+    """
+    import subprocess
+
+    repo = ADDON.parent
+    ref = _dockerfile_ref()
+
+    resolved = subprocess.run(
+        ['git', 'rev-parse', '--verify', f'{ref}^{{commit}}'],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert resolved.returncode == 0, f'BRIDGE_REF {ref!r} is not a commit in this repo'
+
+    pinned = subprocess.run(
+        ['git', 'show', f'{ref}:addon/config.yaml'],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert pinned.returncode == 0, f'no addon/config.yaml at {ref}'
+
+    assert yaml.safe_load(pinned.stdout)['version'] == _load('config.yaml')['version'], (
+        f'BRIDGE_REF {ref} predates the current version bump, so the build '
+        'would ship the previous release under the new version number'
+    )
