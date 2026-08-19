@@ -155,6 +155,18 @@ def convert(
     # work from. The flow itself will say.
     step = _current_step(client, flow_id)
 
+    # A flow that was already answered once is waiting further along, and the
+    # device form is behind it. Posting the device fields to a step that does
+    # not have them is refused with "extra keys not allowed" for every one --
+    # which is how a device that only needed its type picked came back looking
+    # broken. Verified against a live flow sitting on select_type.
+    if step is not None and step.get("step_id") == STEP_SELECT_TYPE:
+        if device_type is None:
+            return _interpret(device.cloud.id, step)
+        return _interpret(
+            device.cloud.id, client.continue_flow(flow_id, {CONF_TYPE: device_type})
+        )
+
     if step is not None and _schema_field(step, CONF_SETUP_MODE):
         step = client.continue_flow(flow_id, {CONF_SETUP_MODE: _pick_setup_mode(step)})
 

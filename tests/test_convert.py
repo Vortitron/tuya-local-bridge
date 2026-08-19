@@ -465,3 +465,67 @@ class TestTheFlowIsAskedNotGuessed:
                 return {"type": "create_entry", "result": "e1", "title": "x"}
 
         assert convert(Broken(), device(), "flow1").ok
+
+
+class TestAFlowAlreadyPartWayThrough:
+    """A flow answered once is waiting further along, not at the start.
+
+    tuya-local's device form is step "user"; once it accepts the details the
+    flow moves to "select_type" and stays there until a type is chosen. The
+    step behind it no longer takes the device fields, so posting them again
+    is refused with "extra keys not allowed" for every one -- which is how a
+    device needing nothing but a type picked came back looking broken.
+
+    Taken from a live flow: one of thirteen was sitting on select_type.
+    """
+
+    SELECT_TYPE = {
+        "type": "form",
+        "step_id": "select_type",
+        "data_schema": [
+            {
+                "name": "type",
+                "selector": {
+                    "select": {
+                        "options": [
+                            {"value": "rgbcw_lightbulb||||", "label": "RGBCW lightbulb"},
+                            {"value": "smart_led_strip||||", "label": "LED strip"},
+                        ]
+                    }
+                },
+            }
+        ],
+    }
+
+    class Client:
+        def __init__(self, step, reply=None):
+            self._step = step
+            self._reply = reply
+            self.posted = []
+
+        def current_step(self, flow_id):
+            return self._step
+
+        def continue_flow(self, flow_id, user_input):
+            self.posted.append(user_input)
+            return self._reply
+
+    def test_the_device_form_is_not_posted_again(self):
+        client = self.Client(self.SELECT_TYPE)
+        result = convert(client, device(), "flow1")
+
+        assert client.posted == [], "the flow is past the device form"
+        assert result.status == "needs_type"
+        assert "rgbcw_lightbulb||||" in result.type_options
+
+    def test_choosing_the_type_finishes_it(self):
+        client = self.Client(
+            self.SELECT_TYPE,
+            {"type": "create_entry", "result": "e1", "title": "floodlight"},
+        )
+        result = convert(client, device(), "flow1", device_type="smart_led_strip||||")
+
+        assert result.ok
+        assert client.posted == [{CONF_TYPE: "smart_led_strip||||"}], (
+            "only the type is outstanding"
+        )
