@@ -49,3 +49,31 @@ def test_base_image_provides_what_the_scripts_use():
     run_sh = (ADDON / 'run.sh').read_text()
     if 'bashio' in run_sh:
         assert all('-base' in b for b in bases)
+
+
+def test_the_package_is_pinned_not_tracking_a_branch():
+    """Docker caches the install layer on the text of the RUN line.
+
+    With "@main" the line never changes, so a rebuild reuses the cached
+    layer and reinstalls the *old* package: the add-on version goes up, the
+    code inside does not, and a fixed bug comes back looking unfixed. That
+    happened between 0.1.1 and 0.1.2 — the image was rebuilt and still had
+    none of the fix in it.
+    """
+    dockerfile = (ADDON / 'Dockerfile').read_text()
+    ref = [l for l in dockerfile.splitlines() if l.startswith('ARG BRIDGE_REF')]
+    assert ref, 'BRIDGE_REF is not declared'
+    value = ref[0].split('=', 1)[1].strip() if '=' in ref[0] else ''
+    assert value not in ('main', 'master', ''), (
+        f'BRIDGE_REF={value!r} tracks a branch, so rebuilds will reuse a '
+        'cached layer and ship stale code'
+    )
+
+
+def test_a_version_bump_alone_invalidates_the_layer():
+    """Belt and braces if BRIDGE_REF is ever forgotten on a release."""
+    dockerfile = (ADDON / 'Dockerfile').read_text()
+    install = [l for l in dockerfile.splitlines() if 'pip3 install' in l]
+    assert install, 'no install step found'
+    block = dockerfile.split('RUN')[-2] if 'RUN' in dockerfile else dockerfile
+    assert 'BUILD_VERSION' in dockerfile
