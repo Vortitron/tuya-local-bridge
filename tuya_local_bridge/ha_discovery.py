@@ -241,11 +241,43 @@ def from_home_assistant(
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         timeout=timeout,
     )
+    if response.status_code in (404, 405):
+        # Running as an add-on, requests go through Home Assistant's proxy for
+        # Supervisor tokens, and that proxy does not permit GET on the config
+        # flow index -- it answers 405 for a path that plainly exists. The
+        # WebSocket API is the supported way to read in-progress flows and is
+        # available over the same token, so use it rather than reporting a
+        # failure the user can do nothing about.
+        return _flows_over_websocket(base_url, token, handler=handler, timeout=timeout)
     if not response.ok:
         raise HaDiscoveryError(
             f"Home Assistant returned {response.status_code}: {response.text[:300]}"
         )
     return parse_flows(_unwrap(response.json()), handler=handler)
+
+
+def _flows_over_websocket(
+    base_url: str,
+    token: str,
+    *,
+    handler: str | None = TUYA_LOCAL_DOMAIN,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> list[LanDevice]:
+    """Read in-progress config flows over the WebSocket API."""
+    from . import ha_ws
+
+    try:
+        result = ha_ws.command(
+            base_url,
+            token,
+            {"type": "config_entries/flow/progress"},
+            timeout=timeout,
+        )
+    except ha_ws.HaWebSocketError as exc:
+        raise HaDiscoveryError(
+            f"Could not read discovery flows from Home Assistant: {exc}"
+        ) from exc
+    return parse_flows(_unwrap(result), handler=handler)
 
 
 def _unwrap(payload: Any) -> list[dict[str, Any]]:

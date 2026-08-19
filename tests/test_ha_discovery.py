@@ -1,3 +1,5 @@
+import pytest
+
 from tuya_local_bridge.ha_discovery import _unwrap, parse_device_registry, parse_flows
 
 FLOW = {
@@ -123,3 +125,63 @@ def test_map_devices_skips_entries_without_an_id():
     from tuya_local_bridge.ha_discovery import map_devices
 
     assert map_devices([{"identifiers": [["tuya", "abc"]]}]) == {}
+
+
+class TestProxyRefusesRest:
+    """Add-ons reach Home Assistant through a proxy with its own allow-list.
+
+    `GET /api/config/config_entries/flow` is refused with 405 for a
+    Supervisor token — a path that plainly exists, answering with a method
+    error. The user saw "Internal Server Error" after scanning the QR code,
+    with the real reason only in the add-on log.
+    """
+
+    @staticmethod
+    def _response(status):
+        class _R:
+            status_code = status
+            ok = status < 400
+            text = "405: Method Not Allowed"
+
+            @staticmethod
+            def json():
+                return {}
+        return _R()
+
+    def test_405_falls_back_to_websocket(self, monkeypatch):
+        from tuya_local_bridge import ha_discovery, ha_ws
+
+        monkeypatch.setattr(ha_discovery.requests, 'get',
+                            lambda *a, **k: self._response(405))
+        seen = {}
+
+        def _command(base_url, token, payload, timeout=None):
+            seen['payload'] = payload
+            return []
+
+        monkeypatch.setattr(ha_ws, 'command', _command)
+        result = ha_discovery.from_home_assistant('http://supervisor/core', 'tok')
+        assert result == []
+        assert seen['payload']['type'] == 'config_entries/flow/progress'
+
+    def test_other_errors_still_surface(self, monkeypatch):
+        """A 500 is a real failure and must not be silently retried."""
+        from tuya_local_bridge import ha_discovery
+
+        monkeypatch.setattr(ha_discovery.requests, 'get',
+                            lambda *a, **k: self._response(500))
+        with pytest.raises(ha_discovery.HaDiscoveryError):
+            ha_discovery.from_home_assistant('http://supervisor/core', 'tok')
+
+    def test_a_websocket_failure_is_reported_usefully(self, monkeypatch):
+        from tuya_local_bridge import ha_discovery, ha_ws
+
+        monkeypatch.setattr(ha_discovery.requests, 'get',
+                            lambda *a, **k: self._response(405))
+
+        def _boom(*a, **k):
+            raise ha_ws.HaWebSocketError('auth failed')
+
+        monkeypatch.setattr(ha_ws, 'command', _boom)
+        with pytest.raises(ha_discovery.HaDiscoveryError, match='auth failed'):
+            ha_discovery.from_home_assistant('http://supervisor/core', 'tok')
