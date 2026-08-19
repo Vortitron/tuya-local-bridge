@@ -175,8 +175,25 @@ def _pick_setup_mode(step: dict[str, Any]) -> str:
     cloud flow they do not need.
     """
     field_def = _schema_field(step, CONF_SETUP_MODE) or {}
+
+    # Home Assistant serialises a select as a nested selector, not a flat
+    # "options" list. Checked against a live tuya-local flow, which returns:
+    #   {"name": "setup_mode", "selector": {"select": {"options":
+    #     ["cloud", "manual", "cloud_fresh_login"]}}}
+    # Reading only the top level found nothing and fell through to the
+    # hardcoded default, which happened to be right — worth fixing before it
+    # is not.
+    raw = field_def.get("options")
+    if not raw:
+        selector = field_def.get("selector") or {}
+        for kind in ("select", "radio"):
+            if isinstance(selector.get(kind), dict):
+                raw = selector[kind].get("options")
+                if raw:
+                    break
+
     options: list[str] = []
-    for option in field_def.get("options") or []:
+    for option in raw or []:
         if isinstance(option, str):
             options.append(option)
         elif isinstance(option, dict) and option.get("value"):

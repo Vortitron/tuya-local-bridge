@@ -319,3 +319,32 @@ def test_a_real_rejection_drives_the_whole_conversion(monkeypatch):
     assert sent[1] == {'setup_mode': 'manual'}
     assert 'device_id' in sent[2]
     assert result.status == 'created'
+
+
+def test_setup_mode_options_are_read_from_a_real_schema():
+    """The shape a live tuya-local flow actually returns.
+
+    Home Assistant nests select options under a selector rather than a flat
+    "options" key. Reading only the top level found nothing and fell back to
+    a hardcoded default that happened to match — which is luck, not a fix.
+    """
+    from tuya_local_bridge import convert as conv
+
+    step = {
+        "type": "form",
+        "errors": {"setup_mode": "required key not provided"},
+        "data_schema": [
+            {
+                "name": "setup_mode",
+                "required": True,
+                "selector": {
+                    "select": {
+                        "options": ["cloud", "manual", "cloud_fresh_login"],
+                        "mode": "list",
+                    }
+                },
+            }
+        ],
+    }
+    assert conv._pick_setup_mode(step) == "manual", \
+        'must choose manual entry, not a cloud login we do not need'
