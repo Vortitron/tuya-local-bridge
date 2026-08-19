@@ -137,3 +137,28 @@ def test_the_button_asks_before_it_writes(rig):
 def test_confirming_nothing_goes_back(rig):
     client, _ = rig
     assert client.post("/convert/confirm", data={}).status_code == 302
+
+
+def test_a_slow_conversion_shows_that_it_is_working(rig):
+    """A minute of blank page is indistinguishable from a dead one.
+
+    Converting can run past a minute when a device has moved and the subnet
+    is being scanned for it, and the button gave no sign of that at all.
+    """
+    client, _ = rig
+    body = client.post("/convert/confirm", data={"device": "hw"}).get_data(
+        as_text=True
+    )
+
+    assert "data-working=" in body, "the slow form must be marked"
+    assert "data-slow" in body, "and marked as the one that can take minutes"
+    assert "setInterval" in body, "the elapsed count has to keep moving"
+
+
+def test_the_page_still_works_without_javascript(rig):
+    """The indicator is decoration; the form must submit regardless."""
+    client, state = rig
+    body = client.post("/convert/confirm", data={"device": "hw"}).get_data(
+        as_text=True
+    )
+    assert 'action="/convert"' in body and "<button>" in body

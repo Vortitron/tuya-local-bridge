@@ -74,10 +74,66 @@ PAGE = """<!doctype html>
           border-radius:6px; padding:.7rem .9rem; margin-bottom:1rem; font-size:.9rem; }
   .qr { background:#fff; padding:1rem; border-radius:10px; display:inline-block; }
   form.inline { display:inline; }
+  .working { display:none; align-items:center; gap:.7rem; margin-top:1rem; }
+  .working.on { display:flex; }
+  .spinner { width:1.1rem; height:1.1rem; border:2px solid var(--line);
+             border-top-color:var(--fg); border-radius:50%;
+             animation:spin 0.9s linear infinite; flex:none; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration:3s; } }
 </style></head><body>
 <h1>Tuya Local Bridge</h1>
 <p class="sub">{{ subtitle }}</p>
 {{ body|safe }}
+<script>
+/* Converting talks to Home Assistant and, when a device has moved, scans the
+ * whole subnet looking for it. That can run past a minute with nothing on
+ * screen, which is indistinguishable from a page that has died -- so say what
+ * is happening and keep counting, rather than leaving a still button and a
+ * blank wait.
+ *
+ * Progressive enhancement only: without this the form still submits. */
+(function () {
+  var forms = document.querySelectorAll('form[data-working]');
+  for (var i = 0; i < forms.length; i++) {
+    wire(forms[i]);
+  }
+
+  function wire(form) {
+    form.addEventListener('submit', function () {
+      var button = form.querySelector('button');
+      if (button) { button.disabled = true; }
+
+      var box = document.createElement('div');
+      box.className = 'working on';
+      box.setAttribute('role', 'status');
+      box.setAttribute('aria-live', 'polite');
+      box.innerHTML = '<div class="spinner"></div>';
+
+      var text = document.createElement('div');
+      box.appendChild(text);
+      form.appendChild(box);
+
+      var note = form.getAttribute('data-working');
+      var slow = form.hasAttribute('data-slow');
+      var started = Date.now();
+
+      function tick() {
+        var seconds = Math.round((Date.now() - started) / 1000);
+        text.textContent = note + ' ' + seconds + 's.' + (
+          slow && seconds > 25
+            ? ' Still going \u2014 a device that has moved is being looked for,'
+              + ' which takes a minute or two. Leave this page open.'
+            : ''
+        );
+      }
+
+      tick();
+      setInterval(tick, 1000);
+    });
+  }
+})();
+</script>
 </body></html>"""
 
 
@@ -590,7 +646,8 @@ def _render_confirm(picked) -> str:
         "<p class=\"muted\">Entity names and history are not changed by this "
         "step.</p>"
         "</div>"
-        f'<form method="post" action="{_u("convert_start")}">{hidden}'
+        f'<form method="post" action="{_u("convert_start")}" '
+        'data-working="Converting\u2026" data-slow>' + hidden +
         "<button>Yes, convert them</button></form>"
         f'<p><a href="{_u("index")}">Cancel</a></p>'
     )
@@ -620,7 +677,8 @@ def _render_convert(pending, done, failed) -> str:
         )
         parts.append(
             '<p>tuya-local could not tell what these are. Best guess is listed first.</p>'
-            '<form method="post" action="' + _u("convert_finish") + '">'
+            '<form method="post" action="' + _u("convert_finish")
+            + '" data-working="Finishing\u2026">'
             f'<div class="card wrap"><table><tr><th>device</th><th>type</th></tr>{rows}</table></div>'
             "<button>Finish conversion</button></form>"
         )
