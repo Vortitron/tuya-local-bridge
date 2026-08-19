@@ -99,6 +99,31 @@ def create_app(
     app = Flask(__name__)
     app.config["STATE_DIR"] = state_dir
 
+    # Home Assistant ingress serves the add-on under a generated prefix such
+    # as /api/hassio_ingress/<token>/ and passes it in X-Ingress-Path. An app
+    # that ignores it emits absolute URLs like /login, which escape the prefix
+    # and land on Home Assistant's own root — a 404, with nothing to suggest
+    # the add-on is the thing at fault.
+    #
+    # Setting SCRIPT_NAME is the standard fix: url_for then generates prefixed
+    # URLs everywhere, without every handler having to know it is behind a
+    # proxy. The header is only present via ingress, so direct access is
+    # unaffected.
+    class _IngressPrefix:
+        def __init__(self, wsgi_app):
+            self.wsgi_app = wsgi_app
+
+        def __call__(self, environ, start_response):
+            prefix = environ.get("HTTP_X_INGRESS_PATH", "")
+            if prefix:
+                environ["SCRIPT_NAME"] = prefix.rstrip("/")
+                path = environ.get("PATH_INFO", "")
+                if path.startswith(prefix):
+                    environ["PATH_INFO"] = path[len(prefix):] or "/"
+            return self.wsgi_app(environ, start_response)
+
+    app.wsgi_app = _IngressPrefix(app.wsgi_app)
+
     session_path = os.path.join(state_dir, "session.json")
     store_path = os.path.join(state_dir, "provenance.json")
 
@@ -165,7 +190,7 @@ def create_app(
     def login_form():
         return page(
             '<div class="card" style="padding:1rem">'
-            '<form method="post" action="/login">'
+            '<form method="post" action="' + url_for("login_start") + '">'
             "<p>Smart Life app &rarr; <b>Me</b> &rarr; gear &rarr; "
             "<b>Account and Security</b> &rarr; <b>User Code</b>.</p>"
             '<p><input name="user_code" placeholder="User Code" required '
@@ -182,13 +207,13 @@ def create_app(
         try:
             challenge = cloud_mod.request_qr(user_code)
         except cloud_mod.TuyaAuthError as exc:
-            return page(f'<p class="err">{exc}</p><p><a href="/login">Try again</a></p>', "Login failed", 400)
+            return page(f'<p class="err">{exc}</p><p><a href="{url_for("login_form")}">Try again</a></p>', "Login failed", 400)
 
         return page(
             f'<div class="card" style="padding:1rem;text-align:center">'
             f'<div class="qr">{_qr_svg(challenge.payload)}</div>'
             f"<p>Scan with Smart Life, then</p>"
-            f'<form method="post" action="/login/finish">'
+            f'<form method="post" action="{url_for("login_finish")}">'
             f'<input type="hidden" name="user_code" value="{_esc(user_code)}">'
             f'<input type="hidden" name="token" value="{_esc(challenge.token)}">'
             f"<button>I have scanned it</button></form>"
@@ -204,7 +229,7 @@ def create_app(
         if result is None:
             return page(
                 '<div class="note">Not scanned yet, or the code expired.</div>'
-                '<p><a href="/login">Start again</a></p>',
+                '<p><a href="' + url_for("login_form") + '">Start again</a></p>',
                 "Waiting for the scan",
                 409,
             )
@@ -313,7 +338,7 @@ def create_app(
         return page(
             f'<div class="card wrap"><table><tr><th>device</th><th>result</th><th></th></tr>'
             f"{rows}</table></div>"
-            f'<p><a href="/">Back to status</a></p>',
+            f'<p><a href="{_u("index")}">Back to status</a></p>',
             f"{len(done)} converted, {len(failed)} failed",
         )
 
@@ -321,6 +346,30 @@ def create_app(
 
 
 # ── rendering helpers ──────────────────────────────────────────────────────
+
+
+# Paths as they are without ingress. The render helpers below are unit-tested
+# directly, with no application around them, and that is worth keeping: their
+# job is HTML, not routing. So ask Flask for the URL when there is a request
+# to ask about, and fall back to the plain path when there is not.
+_PLAIN_PATHS = {
+    "index": "/",
+    "login_form": "/login",
+    "login_start": "/login",
+    "login_finish": "/login/finish",
+    "convert_start": "/convert",
+    "convert_finish": "/convert/finish",
+}
+
+
+def _u(endpoint: str, **values: Any) -> str:
+    try:
+        return url_for(endpoint, **values)
+    except RuntimeError:
+        path = _PLAIN_PATHS[endpoint]
+        if values:
+            path += "?" + "&".join(f"{k}={v}" for k, v in values.items())
+        return path
 
 
 def _esc(value: Any) -> str:
@@ -350,7 +399,7 @@ def _render_status(
 
     if scan_enabled:
         parts.append(
-            '<p><a href="/?rescan=1">Rescan the network</a> <span class="muted">(takes a moment; results are cached)</span></p>'
+            '<p><a href="' + _u("index", rescan=1) + '">Rescan the network</a> <span class="muted">(takes a moment; results are cached)</span></p>'
         )
 
     if rotated:
@@ -371,7 +420,7 @@ def _render_status(
             for m in result.matched
         )
         parts.append(
-            '<h2>Ready to convert</h2><form method="post" action="/convert">'
+            '<h2>Ready to convert</h2><form method="post" action="' + _u("convert_start") + '">'
             f'<div class="card wrap"><table>'
             f"<tr><th></th><th>name</th><th>address</th><th>device id</th><th>type</th></tr>"
             f"{rows}</table></div>"
@@ -446,7 +495,7 @@ def _render_convert(pending, done, failed) -> str:
         )
         parts.append(
             '<p>tuya-local could not tell what these are. Best guess is listed first.</p>'
-            '<form method="post" action="/convert/finish">'
+            '<form method="post" action="' + _u("convert_finish") + '">'
             f'<div class="card wrap"><table><tr><th>device</th><th>type</th></tr>{rows}</table></div>'
             "<button>Finish conversion</button></form>"
         )
@@ -465,7 +514,7 @@ def _render_convert(pending, done, failed) -> str:
     if not parts:
         parts.append('<div class="note">Nothing to do.</div>')
 
-    parts.append('<p><a href="/">Back to status</a></p>')
+    parts.append('<p><a href="' + _u("index") + '">Back to status</a></p>')
     return "".join(parts)
 
 
