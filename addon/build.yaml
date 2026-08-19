@@ -1,0 +1,16 @@
+---
+# Supervisor passes BUILD_FROM into the Dockerfile from this file. Without it
+# the ARG is empty and the build fails before it starts, with the unhelpful
+# "base name (${BUILD_FROM}) should not be blank" — which reaches the user as
+# "An unknown error occurred while trying to build the image".
+#
+# The plain Alpine base (rather than -base-python) is the right pairing here:
+# the Dockerfile installs python3 itself with apk, and this base is what
+# provides bashio and s6, both of which run.sh depends on.
+#
+# Every architecture listed in config.yaml needs an entry, or installs fail
+# on exactly the machines not covered.
+build_from:
+  aarch64: ghcr.io/home-assistant/aarch64-base:3.19
+  amd64: ghcr.io/home-assistant/amd64-base:3.19
+  armv7: ghcr.io/home-assistant/armv7-base:3.19
