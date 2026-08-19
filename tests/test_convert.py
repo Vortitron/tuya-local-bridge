@@ -133,3 +133,74 @@ def test_option_shapes_home_assistant_has_used(schema):
 def test_options_for_an_absent_field():
     assert extract_options({"data_schema": [{"name": "other", "options": ["x"]}]}, CONF_TYPE) == []
     assert extract_options({}, CONF_TYPE) == []
+
+
+class TestSetupModeStep:
+    """Newer tuya-local asks which setup mode you want before the device form.
+
+    On that version the device fields are rejected wholesale — "extra keys
+    not allowed" for every one, plus "setup_mode: required key not provided"
+    — which reads as a broken integration rather than a flow with one more
+    step than it had before. This is the exact payload a real conversion
+    returned.
+    """
+
+    REJECTION = {
+        "type": "form",
+        "step_id": "user",
+        "errors": {
+            "base": [
+                "extra keys not allowed @ data['device_id']",
+                "extra keys not allowed @ data['host']",
+                "extra keys not allowed @ data['local_key']",
+            ],
+            "setup_mode": "required key not provided",
+        },
+        "data_schema": [
+            {"name": "setup_mode", "options": ["cloud", "manual", "smart_life"]},
+        ],
+    }
+
+    class _Client:
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.sent = []
+
+        def continue_flow(self, flow_id, user_input):
+            self.sent.append(user_input)
+            return self.replies.pop(0)
+
+    def _device(self):
+        import tests.test_convert as mod
+        for name in ('make_device', 'device', '_device'):
+            if hasattr(mod, name):
+                return getattr(mod, name)()
+        pytest.skip('no device factory in this module')
+
+    def test_the_mode_is_answered_then_the_device_fields_resent(self, monkeypatch):
+        from tuya_local_bridge import convert as conv
+
+        device = self._device()
+        client = self._Client([
+            self.REJECTION,
+            {"type": "form", "step_id": "local"},
+            {"type": "create_entry", "result": "entry-1", "title": "Hot water"},
+        ])
+        result = conv.convert(client, device, flow_id="f1")
+
+        assert [s.get('setup_mode') for s in client.sent if 'setup_mode' in s] == ['manual'], \
+            'should answer the mode with the manual option, not cloud'
+        assert len(client.sent) == 3, 'device fields must be sent again after the mode'
+        assert client.sent[2]['device_id'] == client.sent[0]['device_id']
+        assert result.status == 'created'
+
+    def test_the_old_flow_is_unchanged(self):
+        """A version without the mode step must not gain an extra round trip."""
+        from tuya_local_bridge import convert as conv
+
+        client = self._Client([
+            {"type": "create_entry", "result": "entry-1", "title": "Hot water"},
+        ])
+        result = conv.convert(client, self._device(), flow_id="f1")
+        assert len(client.sent) == 1
+        assert result.status == 'created'

@@ -40,6 +40,14 @@ CONF_DEVICE_CID = "device_cid"
 CONF_TYPE = "type"
 
 STEP_SELECT_TYPE = "select_type"
+CONF_SETUP_MODE = "setup_mode"
+
+# Newer tuya-local puts a mode choice in front of the device form. We already
+# hold the local key from the cloud, so we want whichever option means "I will
+# type the details in" rather than one that goes back to the cloud or restarts
+# discovery. Ordered by preference; the first match against the offered
+# options wins.
+SETUP_MODE_PREFERENCE = ("manual", "manual_entry", "local", "config", "custom")
 
 
 class FlowError(RuntimeError):
@@ -85,16 +93,25 @@ def convert(
     Returns ``needs_type`` with ``type_options`` when tuya-local wants a device
     type; call again passing ``device_type``.
     """
-    step = client.continue_flow(
-        flow_id,
-        {
-            CONF_DEVICE_ID: device.cloud.id,
-            CONF_HOST: device.lan.ip,
-            CONF_LOCAL_KEY: device.cloud.local_key,
-            CONF_PROTOCOL_VERSION: protocol_version or device.lan.version or "auto",
-            CONF_POLL_ONLY: poll_only,
-        },
-    )
+    device_input = {
+        CONF_DEVICE_ID: device.cloud.id,
+        CONF_HOST: device.lan.ip,
+        CONF_LOCAL_KEY: device.cloud.local_key,
+        CONF_PROTOCOL_VERSION: protocol_version or device.lan.version or "auto",
+        CONF_POLL_ONLY: poll_only,
+    }
+    step = client.continue_flow(flow_id, device_input)
+
+    # tuya-local grew a mode-selection step in front of the device form. On
+    # that version the device fields are rejected wholesale -- "extra keys not
+    # allowed" for every one of them, plus "setup_mode: required key not
+    # provided" -- which reads as a broken integration rather than a flow that
+    # simply has one more step than it used to. Answer the mode, then send the
+    # device fields to the form that follows.
+    if _wants_setup_mode(step):
+        step = client.continue_flow(flow_id, {CONF_SETUP_MODE: _pick_setup_mode(step)})
+        step = client.continue_flow(flow_id, device_input)
+
     result = _interpret(device.cloud.id, step)
 
     # Nothing more to do, or the key/host were rejected.
@@ -103,6 +120,53 @@ def convert(
 
     step = client.continue_flow(flow_id, {CONF_TYPE: device_type})
     return _interpret(device.cloud.id, step)
+
+
+
+def _wants_setup_mode(step: Any) -> bool:
+    """Did this step reject our input because it wanted a mode first?"""
+    if not isinstance(step, dict) or step.get("type") != "form":
+        return False
+    errors = step.get("errors") or {}
+    if CONF_SETUP_MODE in errors:
+        return True
+    # Some versions report it only as a schema mismatch on the other keys.
+    base = errors.get("base")
+    text = " ".join(base) if isinstance(base, list) else str(base or "")
+    if "extra keys not allowed" in text and _schema_field(step, CONF_SETUP_MODE):
+        return True
+    return False
+
+
+def _schema_field(step: dict[str, Any], name: str) -> dict[str, Any] | None:
+    for entry in step.get("data_schema") or []:
+        if isinstance(entry, dict) and entry.get("name") == name:
+            return entry
+    return None
+
+
+def _pick_setup_mode(step: dict[str, Any]) -> str:
+    """Choose the option that means "I will supply the details myself".
+
+    Read the offered options rather than hardcoding a value: the wording is
+    tuya-local's to change, and guessing wrong sends the user back into a
+    cloud flow they do not need.
+    """
+    field_def = _schema_field(step, CONF_SETUP_MODE) or {}
+    options: list[str] = []
+    for option in field_def.get("options") or []:
+        if isinstance(option, str):
+            options.append(option)
+        elif isinstance(option, dict) and option.get("value"):
+            options.append(str(option["value"]))
+        elif isinstance(option, (list, tuple)) and option:
+            options.append(str(option[0]))
+
+    for wanted in SETUP_MODE_PREFERENCE:
+        for option in options:
+            if wanted in option.lower():
+                return option
+    return options[0] if options else SETUP_MODE_PREFERENCE[0]
 
 
 def _interpret(device_id: str, step: dict[str, Any]) -> ConversionResult:
