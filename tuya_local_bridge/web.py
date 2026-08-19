@@ -19,7 +19,13 @@ from flask import Flask, redirect, render_template_string, request, url_for
 from . import cloud as cloud_mod
 from . import discovery as discovery_mod
 from . import ha_discovery
-from .convert import DirectFlowClient, VomeHomeFlowClient, convert
+from .convert import (
+    TUYA_LOCAL_PORT,
+    DirectFlowClient,
+    VomeHomeFlowClient,
+    convert,
+    reachable,
+)
 from .match import merge_lan, reconcile
 from .store import ProvenanceStore
 
@@ -136,15 +142,21 @@ def create_app(
 
     scan_cache: dict[str, Any] = {"at": 0.0, "devices": []}
 
-    def lan_scan(force: bool = False):
-        """Cached UDP scan; empty when scanning is disabled or unavailable."""
+    def lan_scan(force: bool = False, deep: bool = False):
+        """Cached UDP scan; empty when scanning is disabled or unavailable.
+
+        ``deep`` additionally probes every address on the subnet.  A plain
+        scan only hears devices whose broadcasts reach us, and over a bridged
+        tunnel some do not — those keep whichever address Home Assistant
+        recorded when it first saw them, which may be weeks old.
+        """
         if scan_seconds <= 0:
             return []
         fresh = (time.time() - scan_cache["at"]) < scan_cache_seconds
-        if fresh and not force:
+        if fresh and not force and not deep:
             return scan_cache["devices"]
         try:
-            devices = discovery_mod.scan(scan_seconds)
+            devices = discovery_mod.scan(scan_seconds, force_subnet_scan=deep)
         except discovery_mod.DiscoveryUnavailable:
             logger.warning("tinytuya not installed; skipping LAN scan")
             return []
@@ -155,7 +167,7 @@ def create_app(
         scan_cache.update(at=time.time(), devices=devices)
         return devices
 
-    def discovery(force_scan: bool = False):
+    def discovery(force_scan: bool = False, deep: bool = False):
         """(devices, flow_id_by_device_id, converted_ids).
 
         Home Assistant's discovery goes first so its flow ids survive the merge;
@@ -177,7 +189,7 @@ def create_app(
                 logger.warning("could not read the device registry", exc_info=True)
                 converted = set()
 
-        devices = merge_lan(from_ha, lan_scan(force=force_scan))
+        devices = merge_lan(from_ha, lan_scan(force=force_scan, deep=deep))
         flows = {d.id: str(d.raw.get("flow_id") or "") for d in devices}
         return devices, flows, converted
 
@@ -272,6 +284,24 @@ def create_app(
         session = cloud_mod.TuyaCloudSession.load(session_path)
         lan_devices, flows, converted = discovery()
         result = reconcile(session.devices(), lan_devices, already_converted=converted)
+
+        # Addresses go stale.  Home Assistant's discovery remembers every
+        # device it has ever heard and never expires the address, and a plain
+        # UDP scan only refreshes the ones still shouting -- over a bridged
+        # tunnel, several are not.  Handing tuya-local a dead address gets
+        # "base: connection" back, which is true and useless.  So if anything
+        # the user picked does not answer, go and find it properly first.
+        if any(
+            not reachable(m.lan.ip)
+            for m in result.matched
+            if m.id in chosen
+        ):
+            logger.info("a selected device did not answer; running a deep scan")
+            lan_devices, flows, converted = discovery(force_scan=True, deep=True)
+            result = reconcile(
+                session.devices(), lan_devices, already_converted=converted
+            )
+
         client = flow_client()
 
         pending, done, failed = [], [], []
@@ -282,6 +312,21 @@ def create_app(
             if not flow_id:
                 failed.append((matched, "no discovery flow — is tuya-local still running?"))
                 continue
+
+            # Check the device actually answers before handing the address to
+            # tuya-local.  Addresses come from a LAN scan and devices move, so
+            # by the time someone ticks the box the address can be dead.
+            # tuya-local reports that as "base: connection", which is accurate
+            # and tells the owner nothing they can do about it.
+            if not reachable(matched.lan.ip):
+                failed.append((
+                    matched,
+                    f"no answer from {matched.lan.ip} on port {TUYA_LOCAL_PORT} — "
+                    "the device is switched off, or it has moved to a different "
+                    "address since it was found. Rescan and try again.",
+                ))
+                continue
+
             try:
                 outcome = convert(client, matched, flow_id)
             except Exception as exc:

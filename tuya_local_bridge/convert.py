@@ -61,6 +61,26 @@ class FlowClient(Protocol):
         ...
 
 
+TUYA_LOCAL_PORT = 6668
+
+
+def reachable(host: str, port: int = TUYA_LOCAL_PORT, timeout: float = 2.0) -> bool:
+    """Can we open a socket to the device at all?"""
+    import socket
+
+    if not host:
+        return False
+    sock = socket.socket()
+    sock.settimeout(timeout)
+    try:
+        sock.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
 def _flow_response(response: Any, who: str) -> dict[str, Any]:
     """Turn a config-flow HTTP response into a step.
 
