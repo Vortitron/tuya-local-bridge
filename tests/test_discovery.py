@@ -46,3 +46,40 @@ def test_sorts_numerically_by_address_not_lexically():
         "192.168.1.20",
         "192.168.1.100",
     ]
+
+
+def test_a_deep_scan_never_waits_for_an_answer(monkeypatch):
+    """A forced subnet scan must not prompt.
+
+    tinytuya.deviceScan does not pass assume_yes, so the scanner calls
+    input() to confirm each auto-detected network. At a terminal that is
+    helpful; inside the add-on stdin is closed, so the scan blocks forever
+    or dies on EOFError with nobody there to answer.
+    """
+    import sys
+    import types
+
+    seen = {}
+
+    def fake_devices(**kwargs):
+        seen.update(kwargs)
+        return {}
+
+    fake_scanner = types.ModuleType("tinytuya.scanner")
+    fake_scanner.devices = fake_devices
+    fake_tinytuya = types.ModuleType("tinytuya")
+    fake_tinytuya.scanner = fake_scanner
+
+    def boom(*a, **k):
+        raise AssertionError("deviceScan cannot suppress the prompt")
+
+    fake_tinytuya.deviceScan = boom
+    monkeypatch.setitem(sys.modules, "tinytuya", fake_tinytuya)
+    monkeypatch.setitem(sys.modules, "tinytuya.scanner", fake_scanner)
+
+    from tuya_local_bridge import discovery
+
+    discovery.scan(3, force_subnet_scan=True)
+
+    assert seen.get("assume_yes") is True
+    assert seen.get("forcescan") is True

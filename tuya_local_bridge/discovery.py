@@ -46,14 +46,26 @@ def scan(
             "tinytuya is required for LAN discovery: pip install tinytuya"
         ) from exc
 
-    logger.info("scanning the LAN for %ss", seconds)
-    found: dict[str, Any] = tinytuya.deviceScan(
+    logger.info(
+        "scanning the LAN for %ss%s",
+        seconds,
+        " (probing every address)" if force_subnet_scan else "",
+    )
+    # Call the scanner directly rather than tinytuya.deviceScan, which is a
+    # thin wrapper that does not pass assume_yes.  Without it a forced subnet
+    # scan calls input() to confirm each auto-detected network -- fine at a
+    # terminal, but inside the add-on stdin is closed, so it either blocks
+    # forever or dies on EOFError.  There is nobody there to answer.
+    from tinytuya import scanner
+
+    found: dict[str, Any] = scanner.devices(
         verbose=False,
-        maxretry=seconds,
+        scantime=seconds,
         # Polling needs local keys, which is precisely what we do not have yet.
         poll=False,
         byID=False,
         forcescan=force_subnet_scan,
+        assume_yes=True,
     )
     return _normalise(found)
 
