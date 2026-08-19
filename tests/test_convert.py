@@ -348,3 +348,120 @@ def test_setup_mode_options_are_read_from_a_real_schema():
     }
     assert conv._pick_setup_mode(step) == "manual", \
         'must choose manual entry, not a cloud login we do not need'
+
+
+class TestTheFlowIsAskedNotGuessed:
+    """Drive the flow from what it declares, not from how it complains.
+
+    tuya-local put a mode-selection step in front of the device form. Posting
+    the device fields to it is rejected wholesale -- "extra keys not allowed"
+    for every field. Sometimes the reply also names the missing setup_mode,
+    and sometimes it says only "base":
+
+        base: ["extra keys not allowed @ data['device_id']", ...]
+
+    A rejection carries no schema, so there is nothing in that reply to work
+    from. Reading the flow answers the question directly.
+    """
+
+    MODE_STEP = {
+        "type": "form",
+        "step_id": "user",
+        "data_schema": [
+            {
+                "name": "setup_mode",
+                "selector": {
+                    "select": {"options": ["cloud", "manual", "cloud_fresh_login"]}
+                },
+            }
+        ],
+    }
+
+    EXTRA_KEYS = {
+        "type": "form",
+        "errors": {
+            "base": [
+                "extra keys not allowed @ data['device_id']",
+                "extra keys not allowed @ data['host']",
+                "extra keys not allowed @ data['local_key']",
+            ]
+        },
+    }
+
+    class Client:
+        """Answers like tuya-local: nothing but setup_mode until it is given."""
+
+        def __init__(self, step, replies):
+            self._step = step
+            self._replies = list(replies)
+            self.posted = []
+
+        def current_step(self, flow_id):
+            return self._step
+
+        def continue_flow(self, flow_id, user_input):
+            self.posted.append(user_input)
+            return self._replies.pop(0)
+
+    def test_the_mode_step_is_answered_before_the_device_fields(self):
+        client = self.Client(
+            self.MODE_STEP,
+            [
+                {"type": "form", "step_id": "user"},
+                {"type": "create_entry", "result": "e1", "title": "floodlight"},
+            ],
+        )
+        result = convert(client, device(), "flow1")
+
+        assert result.ok, result.message
+        assert client.posted[0] == {"setup_mode": "manual"}, (
+            "the mode must be answered first, from the options the flow offers"
+        )
+        assert "device_id" in client.posted[1]
+
+    def test_a_bare_base_rejection_still_gets_a_useful_message(self):
+        """The floodlight case: no setup_mode key, no schema, just "base"."""
+        client = self.Client(
+            # The flow has moved on and now wants something we do not send.
+            {
+                "type": "form",
+                "step_id": "user",
+                "data_schema": [{"name": "setup_mode"}, {"name": "something_new"}],
+            },
+            [self.EXTRA_KEYS, self.EXTRA_KEYS],
+        )
+        result = convert(client, device(), "flow1")
+
+        assert result.status == "error"
+        assert "extra keys not allowed" not in result.message, (
+            "voluptuous internals must not reach the owner"
+        )
+        assert "setup_mode" in result.message and "something_new" in result.message, (
+            "say what the form is actually asking for"
+        )
+        assert "host" in result.message, "and what we sent"
+
+    def test_a_client_that_cannot_read_flows_still_converts(self):
+        """current_step is optional; the old inference must still work."""
+
+        class Old:
+            def __init__(self):
+                self.posted = []
+
+            def continue_flow(self, flow_id, user_input):
+                self.posted.append(user_input)
+                return {"type": "create_entry", "result": "e1", "title": "x"}
+
+        client = Old()
+        assert convert(client, device(), "flow1").ok
+        assert len(client.posted) == 1
+
+    def test_a_failed_read_does_not_break_the_conversion(self):
+        class Broken:
+            def current_step(self, flow_id):
+                raise RuntimeError("no route to Home Assistant")
+
+            def continue_flow(self, flow_id, user_input):
+                return {"type": "create_entry", "result": "e1", "title": "x"}
+
+        assert convert(Broken(), device(), "flow1").ok

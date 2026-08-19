@@ -1,9 +1,12 @@
 """Join the cloud device list against LAN discovery."""
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection, Iterable
 
 from .models import CloudDevice, LanDevice, MatchedDevice, Reconciliation
+
+logger = logging.getLogger(__name__)
 
 
 def reconcile(
@@ -60,6 +63,49 @@ def reconcile(
     result.cloud_only.sort(key=lambda c: c.name.lower())
     result.lan_only.sort(key=lambda d: d.ip)
     return result
+
+
+def drop_shared_addresses(devices: Iterable[LanDevice]) -> list[LanDevice]:
+    """Discard addresses that more than one device claims.
+
+    Two devices cannot share an address, so when several do, the address
+    belongs to something in the middle rather than to any of them. That
+    happens whenever broadcasts reach Home Assistant through a routed tunnel:
+    the far side masquerades them, every device appears to be at the gateway,
+    and Home Assistant's discovery -- which never expires what it recorded --
+    keeps that address for good.
+
+    On the house this was found on, devices were still carrying the address of
+    the VPN box, so a conversion reported "no answer from 192.168.1.16", which
+    is true and deeply confusing.
+
+    Dropping the address rather than the device keeps the flow id, which is
+    what conversion actually needs; a scan can then supply a real address.
+    """
+    devices = list(devices)
+    claims: dict[str, set[str]] = {}
+    for device in devices:
+        if device.ip:
+            claims.setdefault(device.ip, set()).add(device.id)
+    shared = {ip for ip, ids in claims.items() if len(ids) > 1}
+    if not shared:
+        return devices
+
+    logger.info(
+        "ignoring %s claimed by several devices: probably a tunnel gateway, "
+        "not a device",
+        ", ".join(sorted(shared)),
+    )
+    return [
+        LanDevice(
+            id=d.id,
+            ip="" if d.ip in shared else d.ip,
+            version=d.version,
+            product_key=d.product_key,
+            raw=d.raw,
+        )
+        for d in devices
+    ]
 
 
 def merge_lan(*sources: Iterable[LanDevice]) -> list[LanDevice]:

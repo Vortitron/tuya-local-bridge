@@ -119,3 +119,21 @@ def test_a_device_that_is_really_gone_says_so_usefully(tmp_path, monkeypatch, ri
     assert "switched off" in body or "moved" in body, (
         "tell the owner what to check"
     )
+
+
+def test_the_button_asks_before_it_writes(rig):
+    """"Convert selected" must not be the point of no return."""
+    client, state = rig
+    response = client.post("/convert/confirm", data={"device": "hw"})
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert state["submitted"] == [], "nothing may be written before confirming"
+    assert "hot water" in body, "name what is about to change"
+    assert "Device type" in body, "warn that a choice is still coming"
+    assert 'action="/convert"' in body, "and offer the way through"
+
+
+def test_confirming_nothing_goes_back(rig):
+    client, _ = rig
+    assert client.post("/convert/confirm", data={}).status_code == 302

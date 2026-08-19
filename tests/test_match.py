@@ -140,3 +140,47 @@ def test_merge_keeps_the_flow_id_a_later_source_lacks():
 def test_merge_ignores_records_without_an_id():
     from tuya_local_bridge.match import merge_lan
     assert merge_lan([lan("", "192.168.1.5")]) == []
+
+
+def test_an_address_claimed_by_several_devices_is_ignored():
+    """Two devices cannot share an address, so it belongs to neither.
+
+    Broadcasts that reach Home Assistant through a routed tunnel are
+    masqueraded by the far side, so every device appears to be at the
+    gateway. Home Assistant's discovery never expires what it recorded, so
+    that address sticks -- and a conversion then reports "no answer from
+    192.168.1.16", which is the VPN box.
+    """
+    from tuya_local_bridge.match import drop_shared_addresses
+
+    gateway = "192.168.1.16"
+    kept = drop_shared_addresses(
+        [
+            LanDevice(id="a", ip=gateway, raw={"flow_id": "f1"}),
+            LanDevice(id="b", ip=gateway, raw={"flow_id": "f2"}),
+            LanDevice(id="c", ip="192.168.1.78"),
+        ]
+    )
+
+    by_id = {d.id: d for d in kept}
+    assert by_id["a"].ip == "" and by_id["b"].ip == ""
+    assert by_id["c"].ip == "192.168.1.78", "a unique address is a real one"
+    assert by_id["a"].raw["flow_id"] == "f1", (
+        "the flow id is what conversion needs; only the address is suspect"
+    )
+
+
+def test_a_scan_can_supply_the_address_that_was_dropped():
+    """Dropping a bad address must leave room for a good one."""
+    from tuya_local_bridge.match import drop_shared_addresses, merge_lan
+
+    from_ha = drop_shared_addresses(
+        [
+            LanDevice(id="a", ip="192.168.1.16", raw={"flow_id": "f1"}),
+            LanDevice(id="b", ip="192.168.1.16", raw={"flow_id": "f2"}),
+        ]
+    )
+    merged = {d.id: d for d in merge_lan(from_ha, [LanDevice(id="a", ip="192.168.1.78")])}
+
+    assert merged["a"].ip == "192.168.1.78"
+    assert merged["a"].raw["flow_id"] == "f1"

@@ -55,7 +55,11 @@ class FlowError(RuntimeError):
 
 
 class FlowClient(Protocol):
-    """Whatever can POST a step to Home Assistant's config-flow API."""
+    """Whatever can POST a step to Home Assistant's config-flow API.
+
+    ``current_step`` is optional: clients that cannot read a flow still work,
+    they just have to find out what it wants by being told off for guessing.
+    """
 
     def continue_flow(self, flow_id: str, user_input: dict[str, Any]) -> dict[str, Any]:
         ...
@@ -142,17 +146,42 @@ def convert(
         CONF_PROTOCOL_VERSION: protocol_version or device.lan.version or "auto",
         CONF_POLL_ONLY: poll_only,
     }
+    # Ask the flow what it is waiting for rather than guessing and reading
+    # the telling-off. tuya-local grew a mode-selection step in front of the
+    # device form, and on that version posting the device fields is rejected
+    # wholesale -- "extra keys not allowed" for every one of them. Sometimes
+    # that reply names the missing setup_mode and sometimes it says only
+    # "base", and a rejection carries no schema, so there is nothing in it to
+    # work from. The flow itself will say.
+    step = _current_step(client, flow_id)
+
+    if step is not None and _schema_field(step, CONF_SETUP_MODE):
+        step = client.continue_flow(flow_id, {CONF_SETUP_MODE: _pick_setup_mode(step)})
+
     step = client.continue_flow(flow_id, device_input)
 
-    # tuya-local grew a mode-selection step in front of the device form. On
-    # that version the device fields are rejected wholesale -- "extra keys not
-    # allowed" for every one of them, plus "setup_mode: required key not
-    # provided" -- which reads as a broken integration rather than a flow that
-    # simply has one more step than it used to. Answer the mode, then send the
-    # device fields to the form that follows.
+    # Older path, and the fallback for a client that cannot read the flow:
+    # infer the mode step from the rejection.
     if _wants_setup_mode(step):
         step = client.continue_flow(flow_id, {CONF_SETUP_MODE: _pick_setup_mode(step)})
         step = client.continue_flow(flow_id, device_input)
+
+    # Still rejected as the wrong shape. Say what the form is actually asking
+    # for -- "extra keys not allowed" on its own leaves nobody anywhere.
+    if _rejected_as_wrong_shape(step):
+        wanted = _declared_fields(_current_step(client, flow_id))
+        if wanted:
+            return ConversionResult(
+                device_id=device.cloud.id,
+                status="error",
+                message=(
+                    "tuya-local would not accept the device details. Its form "
+                    f"is asking for {', '.join(wanted)}; the bridge sent "
+                    f"{', '.join(sorted(device_input))}. This usually means "
+                    "tuya-local's setup has changed -- please report it."
+                ),
+                step=step if isinstance(step, dict) else {},
+            )
 
     result = _interpret(device.cloud.id, step)
 
@@ -163,6 +192,47 @@ def convert(
     step = client.continue_flow(flow_id, {CONF_TYPE: device_type})
     return _interpret(device.cloud.id, step)
 
+
+
+def _current_step(client: FlowClient, flow_id: str) -> dict[str, Any] | None:
+    """What is this flow waiting for? ``None`` if we cannot find out."""
+    reader = getattr(client, "current_step", None)
+    if reader is None:
+        return None
+    try:
+        step = reader(flow_id)
+    except Exception:
+        # Never let a diagnostic read break the conversion it was meant to help.
+        logger.warning("could not read flow %s", flow_id, exc_info=True)
+        return None
+    return step if isinstance(step, dict) else None
+
+
+def _declared_fields(step: dict[str, Any] | None) -> list[str]:
+    """Field names a form step says it wants."""
+    if not isinstance(step, dict):
+        return []
+    return [
+        str(entry["name"])
+        for entry in step.get("data_schema") or []
+        if isinstance(entry, dict) and entry.get("name")
+    ]
+
+
+def _rejected_as_wrong_shape(step: Any) -> bool:
+    """Was the input refused for its shape rather than its contents?
+
+    A wrong local key comes back as a specific complaint. "extra keys not
+    allowed" means the form does not have those fields at all, which is a
+    different problem and needs a different answer.
+    """
+    if not isinstance(step, dict) or step.get("type") != "form":
+        return False
+    for value in (step.get("errors") or {}).values():
+        text = " ".join(value) if isinstance(value, list) else str(value or "")
+        if "extra keys not allowed" in text:
+            return True
+    return False
 
 
 def _wants_setup_mode(step: Any) -> bool:
@@ -351,6 +421,15 @@ class VomeHomeFlowClient:
         )
         return _flow_response(response, "VomeHome")
 
+    def current_step(self, flow_id: str) -> dict[str, Any]:
+        response = requests.get(
+            f"{self.api_url}/api/v1/instances/{quote(self.instance_id)}"
+            f"/ha/config/config_entries/flow/{quote(flow_id)}",
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=self.timeout,
+        )
+        return _flow_response(response, "VomeHome")
+
 
 class DirectFlowClient:
     """Continue flows straight against Home Assistant."""
@@ -368,6 +447,14 @@ class DirectFlowClient:
                 "Content-Type": "application/json",
             },
             data=json.dumps(user_input),
+            timeout=self.timeout,
+        )
+        return _flow_response(response, "Home Assistant")
+
+    def current_step(self, flow_id: str) -> dict[str, Any]:
+        response = requests.get(
+            f"{self.base_url}/api/config/config_entries/flow/{quote(flow_id)}",
+            headers={"Authorization": f"Bearer {self.token}"},
             timeout=self.timeout,
         )
         return _flow_response(response, "Home Assistant")

@@ -26,7 +26,7 @@ from .convert import (
     convert,
     reachable,
 )
-from .match import merge_lan, reconcile
+from .match import drop_shared_addresses, merge_lan, reconcile
 from .store import ProvenanceStore
 
 logger = logging.getLogger(__name__)
@@ -189,7 +189,12 @@ def create_app(
                 logger.warning("could not read the device registry", exc_info=True)
                 converted = set()
 
-        devices = merge_lan(from_ha, lan_scan(force=force_scan, deep=deep))
+        # Home Assistant's discovery can hold the address of whatever forwarded
+        # the broadcast rather than the device's own, so strip any address
+        # several devices claim before the scan gets a chance to correct it.
+        devices = merge_lan(
+            drop_shared_addresses(from_ha), lan_scan(force=force_scan, deep=deep)
+        )
         flows = {d.id: str(d.raw.get("flow_id") or "") for d in devices}
         return devices, flows, converted
 
@@ -273,6 +278,26 @@ def create_app(
         )
 
     # ── conversion ─────────────────────────────────────────────────────────
+
+    @app.post("/convert/confirm")
+    def convert_confirm():
+        """Say what is about to happen before anything happens.
+
+        Conversion writes to Home Assistant, and the run is not all-or-nothing
+        -- most devices need a type chosen part way through. Someone pressing
+        a button labelled "Convert selected" deserves to know both of those
+        before they press it, not after.
+        """
+        chosen = set(request.form.getlist("device"))
+        if not chosen:
+            return redirect(url_for("index"))
+
+        session = cloud_mod.TuyaCloudSession.load(session_path)
+        lan_devices, flows, converted = discovery()
+        result = reconcile(session.devices(), lan_devices, already_converted=converted)
+        picked = [m for m in result.matched if m.id in chosen]
+
+        return page(_render_confirm(picked), "Before we start")
 
     @app.post("/convert")
     def convert_start():
@@ -402,6 +427,7 @@ _PLAIN_PATHS = {
     "login_form": "/login",
     "login_start": "/login",
     "login_finish": "/login/finish",
+    "convert_confirm": "/convert/confirm",
     "convert_start": "/convert",
     "convert_finish": "/convert/finish",
 }
@@ -465,11 +491,11 @@ def _render_status(
             for m in result.matched
         )
         parts.append(
-            '<h2>Ready to convert</h2><form method="post" action="' + _u("convert_start") + '">'
+            '<h2>Ready to convert</h2><form method="post" action="' + _u("convert_confirm") + '">'
             f'<div class="card wrap"><table>'
             f"<tr><th></th><th>name</th><th>address</th><th>device id</th><th>type</th></tr>"
             f"{rows}</table></div>"
-            "<button>Convert selected</button></form>"
+            "<button>Convert selected&hellip;</button></form>"
         )
 
     if result.converted:
@@ -514,6 +540,60 @@ def _render_status(
         )
 
     return "".join(parts)
+
+
+def _render_confirm(picked) -> str:
+    """What will happen, and what is still to be decided."""
+    if not picked:
+        return (
+            '<p class="err">Nothing selected.</p>'
+            f'<p><a href="{_u("index")}">Back</a></p>'
+        )
+
+    rows = "".join(
+        f"<tr><td>{_esc(m.cloud.name)}</td><td><code>{_esc(m.lan.ip)}</code></td>"
+        f'<td class="muted">{_esc(m.cloud.category)}</td></tr>'
+        for m in picked
+    )
+    count = len(picked)
+    plural = "device" if count == 1 else "devices"
+    hidden = "".join(
+        f'<input type="hidden" name="device" value="{_esc(m.id)}">' for m in picked
+    )
+
+    return (
+        f"<h2>About to convert {count} {plural}</h2>"
+        f'<div class="card wrap"><table>'
+        "<tr><th>name</th><th>address</th><th>type</th></tr>"
+        f"{rows}</table></div>"
+        '<div class="card" style="padding:1rem">'
+        "<h3>What happens now</h3>"
+        "<ul>"
+        "<li>Each device is added to <b>tuya-local</b> in Home Assistant, "
+        "using the key from your Tuya account. It then works over your own "
+        "network, with no cloud in the way.</li>"
+        "<li>Devices are done one at a time. If one fails the rest still go "
+        "ahead, and you will get a line explaining each failure.</li>"
+        "<li>Nothing is removed. Your existing Tuya integration and its "
+        "entities stay exactly as they are until you choose to remove "
+        "them.</li>"
+        "</ul>"
+        "<h3>What you may still be asked</h3>"
+        "<ul>"
+        "<li><b>Device type.</b> tuya-local often cannot tell a dimmer from a "
+        "switch, so the next screen may ask you to pick one per device. It "
+        "puts its best guess first. Nothing is written for those devices "
+        "until you choose.</li>"
+        "<li><b>A device that has moved.</b> If one does not answer, we look "
+        "for it again before giving up, which takes a minute or so.</li>"
+        "</ul>"
+        "<p class=\"muted\">Entity names and history are not changed by this "
+        "step.</p>"
+        "</div>"
+        f'<form method="post" action="{_u("convert_start")}">{hidden}'
+        "<button>Yes, convert them</button></form>"
+        f'<p><a href="{_u("index")}">Cancel</a></p>'
+    )
 
 
 def _render_convert(pending, done, failed) -> str:

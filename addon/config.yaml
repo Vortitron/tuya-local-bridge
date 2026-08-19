@@ -1,6 +1,6 @@
 ---
 name: Tuya Local Bridge
-version: "0.1.8"
+version: "0.1.9"
 slug: tuya_local_bridge
 description: >-
   Find the local keys for your Tuya devices and convert them to local control,
