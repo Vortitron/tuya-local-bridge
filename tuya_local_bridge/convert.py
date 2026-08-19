@@ -61,6 +61,28 @@ class FlowClient(Protocol):
         ...
 
 
+def _flow_response(response: Any, who: str) -> dict[str, Any]:
+    """Turn a config-flow HTTP response into a step.
+
+    A 400 here is not a transport failure: it is the flow saying the input
+    was wrong, and the body carries the reasons. Raising on it throws away
+    the only useful part of the reply — which is how a missing setup_mode
+    step surfaced as "Home Assistant returned 400: {...}" instead of being
+    handled. Anything else (401, 404, 500) really is a failure.
+    """
+    if response.status_code == 400:
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict) and body.get("errors"):
+            # The error body omits the step type; the caller keys off it.
+            return {"type": "form", **body}
+    if not response.ok:
+        raise FlowError(f"{who} returned {response.status_code}: {response.text[:300]}")
+    return response.json()
+
+
 @dataclass
 class ConversionResult:
     """Outcome of one attempt to advance a device's flow."""
@@ -290,9 +312,7 @@ class VomeHomeFlowClient:
             data=json.dumps(user_input),
             timeout=self.timeout,
         )
-        if not response.ok:
-            raise FlowError(f"VomeHome returned {response.status_code}: {response.text[:300]}")
-        return response.json()
+        return _flow_response(response, "VomeHome")
 
 
 class DirectFlowClient:
@@ -313,8 +333,4 @@ class DirectFlowClient:
             data=json.dumps(user_input),
             timeout=self.timeout,
         )
-        if not response.ok:
-            raise FlowError(
-                f"Home Assistant returned {response.status_code}: {response.text[:300]}"
-            )
-        return response.json()
+        return _flow_response(response, "Home Assistant")

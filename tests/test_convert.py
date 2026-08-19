@@ -204,3 +204,118 @@ class TestSetupModeStep:
         result = conv.convert(client, self._device(), flow_id="f1")
         assert len(client.sent) == 1
         assert result.status == 'created'
+
+
+class TestFlowValidationErrors:
+    """Home Assistant answers a rejected config-flow step with HTTP 400.
+
+    The body carries the reasons, so raising on the status throws away the
+    only useful part of the reply. That is why the setup_mode handling did
+    not fire: the exception was raised before anything could look at it, and
+    the user saw the raw JSON as an error message twice over.
+    """
+
+    class _Response:
+        def __init__(self, status, payload=None, text=""):
+            self.status_code = status
+            self.ok = status < 400
+            self._payload = payload
+            self.text = text
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("no json")
+            return self._payload
+
+    REJECTION = {
+        "errors": {
+            "base": ["extra keys not allowed @ data['device_id']"],
+            "setup_mode": "required key not provided",
+        }
+    }
+
+    def test_a_400_is_returned_as_a_step(self):
+        from tuya_local_bridge import convert as conv
+
+        step = conv._flow_response(self._Response(400, self.REJECTION), "Home Assistant")
+        assert step["type"] == "form", 'callers key off the step type'
+        assert step["errors"]["setup_mode"]
+
+    def test_the_setup_mode_handling_now_sees_it(self):
+        """The two fixes only work together."""
+        from tuya_local_bridge import convert as conv
+
+        step = conv._flow_response(self._Response(400, self.REJECTION), "Home Assistant")
+        assert conv._wants_setup_mode(step) is True
+
+    def test_other_statuses_still_raise(self):
+        from tuya_local_bridge import convert as conv
+
+        for status in (401, 404, 500):
+            with pytest.raises(conv.FlowError):
+                conv._flow_response(self._Response(status, text="nope"), "Home Assistant")
+
+    def test_a_400_without_a_usable_body_still_raises(self):
+        """An empty or non-JSON 400 is a real failure, not a form."""
+        from tuya_local_bridge import convert as conv
+
+        with pytest.raises(conv.FlowError):
+            conv._flow_response(self._Response(400, None, text="bad request"), "Home Assistant")
+
+
+def test_a_real_rejection_drives_the_whole_conversion(monkeypatch):
+    """End to end over HTTP, with the exact payload Home Assistant returned.
+
+    The previous attempt tested the setup_mode handling against a step dict
+    that the client could never actually produce, so it passed while the
+    real path still failed. This drives convert() through the HTTP client.
+    """
+    from tuya_local_bridge import convert as conv
+
+    sent = []
+    replies = [
+        # 1: device fields, rejected because the mode was not chosen
+        (400, {"errors": {"base": ["extra keys not allowed @ data['device_id']"],
+                          "setup_mode": "required key not provided"},
+               "data_schema": [{"name": "setup_mode",
+                                "options": ["cloud", "manual"]}]}),
+        # 2: mode accepted, the device form follows
+        (200, {"type": "form", "step_id": "local"}),
+        # 3: device fields accepted
+        (200, {"type": "create_entry", "result": "entry-9", "title": "Hot water"}),
+    ]
+
+    class _Resp:
+        def __init__(self, status, payload):
+            self.status_code = status
+            self.ok = status < 400
+            self._p = payload
+            self.text = str(payload)
+
+        def json(self):
+            return self._p
+
+    def _post(url, headers=None, data=None, timeout=None):
+        import json as _json
+        sent.append(_json.loads(data))
+        return _Resp(*replies[len(sent) - 1])
+
+    monkeypatch.setattr(conv.requests, 'post', _post)
+    client = conv.DirectFlowClient('http://ha.local', 'tok')
+
+    import tests.test_convert as mod
+    device = None
+    for name in ('make_device', 'device', '_device'):
+        if hasattr(mod, name):
+            device = getattr(mod, name)()
+            break
+    if device is None:
+        pytest.skip('no device factory in this module')
+
+    result = conv.convert(client, device, flow_id='f1')
+
+    assert len(sent) == 3, f'expected reject, mode, retry — got {len(sent)} calls'
+    assert 'device_id' in sent[0]
+    assert sent[1] == {'setup_mode': 'manual'}
+    assert 'device_id' in sent[2]
+    assert result.status == 'created'
