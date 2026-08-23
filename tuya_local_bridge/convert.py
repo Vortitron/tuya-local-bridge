@@ -40,6 +40,8 @@ CONF_DEVICE_CID = "device_cid"
 CONF_TYPE = "type"
 
 STEP_SELECT_TYPE = "select_type"
+STEP_NAME = "name"
+CONF_NAME = "name"
 CONF_SETUP_MODE = "setup_mode"
 
 # Newer tuya-local puts a mode choice in front of the device form. We already
@@ -163,8 +165,8 @@ def convert(
     if step is not None and step.get("step_id") == STEP_SELECT_TYPE:
         if device_type is None:
             return _interpret(device.cloud.id, step)
-        return _interpret(
-            device.cloud.id, client.continue_flow(flow_id, {CONF_TYPE: device_type})
+        return _finish(
+            client, flow_id, client.continue_flow(flow_id, {CONF_TYPE: device_type}), device
         )
 
     if step is not None and _schema_field(step, CONF_SETUP_MODE):
@@ -195,15 +197,57 @@ def convert(
                 step=step if isinstance(step, dict) else {},
             )
 
-    result = _interpret(device.cloud.id, step)
+    result = _finish(client, flow_id, step, device)
 
     # Nothing more to do, or the key/host were rejected.
     if result.status != "needs_type" or device_type is None:
         return result
 
     step = client.continue_flow(flow_id, {CONF_TYPE: device_type})
-    return _interpret(device.cloud.id, step)
+    return _finish(client, flow_id, step, device)
 
+
+
+def _answer_name_step(
+    client: FlowClient, flow_id: str, step: Any, name: str
+) -> Any:
+    """Fill in tuya-local's closing "what shall I call it?" form.
+
+    Once the type is settled tuya-local asks for a name, and that step is the
+    last one before the entry exists. The bridge already knows the answer --
+    it read the name off the Tuya account -- so there is nothing worth
+    stopping to ask, and stopping left every conversion one form short of a
+    device while reporting an unhandled step.
+
+    Which field to fill is read from the form rather than assumed: guessing
+    the shape of a step is what produced "extra keys not allowed" everywhere
+    else in this flow. A form that wants more than one thing is left alone,
+    because then the bridge genuinely does not know what it is being asked.
+    """
+    if not isinstance(step, dict) or step.get("type") != "form":
+        return step
+    if step.get("step_id") != STEP_NAME or step.get("errors"):
+        return step
+
+    fields = _declared_fields(step)
+    if len(fields) == 1:
+        field = fields[0]
+    elif not fields:
+        # No serialised schema to read; the step id is the only clue.
+        field = CONF_NAME
+    else:
+        return step
+    return client.continue_flow(flow_id, {field: name})
+
+
+def _finish(
+    client: FlowClient, flow_id: str, step: Any, device: MatchedDevice
+) -> ConversionResult:
+    """Interpret a step, answering the closing name form if that is where we are."""
+    step = _answer_name_step(
+        client, flow_id, step, device.cloud.name or device.cloud.id
+    )
+    return _interpret(device.cloud.id, step)
 
 
 def _current_step(client: FlowClient, flow_id: str) -> dict[str, Any] | None:

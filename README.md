@@ -1,17 +1,19 @@
 # tuya-local-bridge
 
 > [!WARNING]
-> **Conversion does not work end to end yet** (as of 0.1.11, Aug 2026).
+> **Conversion has not yet been confirmed working end to end** (as of 0.1.11,
+> Aug 2026).
 >
-> Discovery, cloud login and key matching work. Driving tuya-local's config
-> flow does not: the flow has at least four steps (`user` → `local` →
-> `select_type` → a step asking for `name`), flows persist part-answered
-> between attempts, and the bridge does not yet answer the last one. A
-> conversion therefore stops with "tuya-local would not accept the device
-> details. Its form is asking for name".
+> Discovery, cloud login and key matching work. tuya-local's config flow has
+> at least four steps (`user` → `local` → `select_type` → `name`) and flows
+> persist part-answered between attempts. The bridge now answers all four,
+> including the closing `name` step that previously stopped every conversion
+> with "tuya-local would not accept the device details. Its form is asking for
+> name" — but that last step is covered by tests against a recorded flow
+> shape, not yet by a device converted on a live install.
 >
-> Use it to *find* your devices and their local keys; add them to tuya-local
-> by hand for now.
+> If it stops short, use it to *find* your devices and their local keys and
+> add those to tuya-local by hand.
 
 
 Joins **Tuya cloud local keys** to **LAN-discovered devices**, so

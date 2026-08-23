@@ -529,3 +529,92 @@ class TestAFlowAlreadyPartWayThrough:
         assert client.posted == [{CONF_TYPE: "smart_led_strip||||"}], (
             "only the type is outstanding"
         )
+
+
+NAME_STEP = {
+    "type": "form",
+    "step_id": "name",
+    "data_schema": [{"name": "name"}],
+}
+
+
+class TestTheClosingNameStep:
+    """tuya-local asks what to call the device once the type is settled.
+
+    That form is the last one before the entry exists, and the bridge already
+    knows the answer -- it read the name off the Tuya account. Leaving it
+    unanswered stopped every conversion one form short of a device and
+    reported it as an unhandled step, which is what "conversion does not work
+    end to end" came down to.
+    """
+
+    def test_the_name_form_is_answered_from_the_tuya_account(self):
+        client = FakeClient(SELECT_TYPE, NAME_STEP, CREATED)
+        result = convert(client, device(), "flow1", device_type="Smart bulb")
+
+        assert result.status == "created"
+        assert client.calls[-1][1] == {"name": "bulb"}
+
+    def test_the_device_id_stands_in_for_a_device_with_no_name(self):
+        client = FakeClient(SELECT_TYPE, NAME_STEP, CREATED)
+        nameless = MatchedDevice(
+            cloud=CloudDevice(id="abc", name="", local_key="k"),
+            lan=LanDevice(id="abc", ip="192.168.1.5", version="3.3"),
+        )
+        convert(client, nameless, "flow1", device_type="Smart bulb")
+
+        assert client.calls[-1][1] == {"name": "abc"}
+
+    def test_the_field_is_read_from_the_form_not_assumed(self):
+        """Assuming the shape of a step is what produced "extra keys not allowed"."""
+        renamed = {
+            "type": "form",
+            "step_id": "name",
+            "data_schema": [{"name": "friendly_name"}],
+        }
+        client = FakeClient(SELECT_TYPE, renamed, CREATED)
+        convert(client, device(), "flow1", device_type="Smart bulb")
+
+        assert client.calls[-1][1] == {"friendly_name": "bulb"}
+
+    def test_a_name_form_asking_for_more_than_one_thing_is_left_alone(self):
+        """Then the bridge genuinely does not know what it is being asked."""
+        ambiguous = {
+            "type": "form",
+            "step_id": "name",
+            "data_schema": [{"name": "name"}, {"name": "area"}],
+        }
+        client = FakeClient(SELECT_TYPE, ambiguous)
+        result = convert(client, device(), "flow1", device_type="Smart bulb")
+
+        assert result.status == "error"
+        assert "name" in result.message
+
+    def test_a_name_form_that_came_back_with_errors_is_not_resubmitted(self):
+        """Resubmitting the same rejected value just loops."""
+        rejected = {
+            "type": "form",
+            "step_id": "name",
+            "data_schema": [{"name": "name"}],
+            "errors": {"name": "name_exists"},
+        }
+        client = FakeClient(SELECT_TYPE, rejected)
+        result = convert(client, device(), "flow1", device_type="Smart bulb")
+
+        assert result.status == "error"
+        assert result.errors == {"name": "name_exists"}
+        assert len(client.calls) == 2, "the name step must not be answered twice"
+
+    def test_a_flow_resumed_on_select_type_still_reaches_the_name_step(self):
+        """The floodlight's case: a part-answered flow, resumed rather than restarted."""
+
+        class ResumedClient(FakeClient):
+            def current_step(self, flow_id):
+                return SELECT_TYPE
+
+        client = ResumedClient(NAME_STEP, CREATED)
+        result = convert(client, device(), "flow1", device_type="Smart bulb")
+
+        assert result.status == "created"
+        assert client.calls[0][1] == {CONF_TYPE: "Smart bulb"}
+        assert client.calls[-1][1] == {"name": "bulb"}
