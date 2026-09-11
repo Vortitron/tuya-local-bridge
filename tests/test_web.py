@@ -149,3 +149,47 @@ def test_swap_preview_escapes_entity_ids():
 
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
+
+
+# ── Fixing devices converted before the offer existed ──────────────────────
+
+def converted_result(*ids):
+    """A reconciliation where the given devices are already on tuya-local."""
+    devices = [cloud(id_=i, name=f"device {i}") for i in ids]
+    return reconcile(devices, [], already_converted=set(ids))
+
+
+def test_already_converted_devices_can_be_selected_for_a_swap():
+    # The whole point: someone who converted last week should not have to
+    # convert again to get their automations pointing at the right entity.
+    html = _render_status(converted_result("abc"), {}, [])
+
+    assert 'name="device" value="abc"' in html
+    assert "Move the entity ids across" in html
+
+
+def test_a_device_whose_ids_already_moved_is_not_offered_again():
+    html = _render_status(converted_result("abc"), {}, [], swapped=frozenset({"abc"}))
+
+    assert 'name="device" value="abc"' not in html
+    assert "ids moved" in html
+
+
+def test_the_button_disappears_when_every_device_is_done():
+    html = _render_status(converted_result("abc"), {}, [], swapped=frozenset({"abc"}))
+    assert "Move the entity ids across" not in html
+
+
+def test_a_mix_offers_only_the_ones_still_needing_it():
+    html = _render_status(
+        converted_result("abc", "def"), {}, [], swapped=frozenset({"abc"})
+    )
+
+    assert 'name="device" value="def"' in html
+    assert 'name="device" value="abc"' not in html
+    assert "Move the entity ids across" in html
+
+
+def test_the_section_says_why_it_matters():
+    html = _render_status(converted_result("abc"), {}, [])
+    assert "still pointing at the" in html

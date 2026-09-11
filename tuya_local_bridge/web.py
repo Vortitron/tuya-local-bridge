@@ -388,7 +388,17 @@ def create_app(
 
         result = reconcile(cloud_devices, lan_devices, already_converted=converted)
         return page(
-            _render_status(result, flows, rotated, scan_enabled=scan_seconds > 0),
+            _render_status(
+                result,
+                flows,
+                rotated,
+                scan_enabled=scan_seconds > 0,
+                swapped=frozenset(
+                    device_id
+                    for device_id, record in store.devices.items()
+                    if record.active_migration is not None
+                ),
+            ),
             f"{session.username or 'connected'} — {len(cloud_devices)} devices on the account",
         )
 
@@ -723,7 +733,12 @@ def _esc(value: Any) -> str:
 
 
 def _render_status(
-    result, flows: dict[str, str], rotated: list[str], *, scan_enabled: bool = False
+    result,
+    flows: dict[str, str],
+    rotated: list[str],
+    *,
+    scan_enabled: bool = False,
+    swapped: frozenset[str] = frozenset(),
 ) -> str:
     parts: list[str] = []
 
@@ -770,13 +785,33 @@ def _render_status(
     if result.converted:
         parts.append(
             "<h2>Already on tuya-local</h2>"
+            '<p class="muted">Converted earlier. If their entity ids were never '
+            "moved across, anything referring to them is still pointing at the "
+            "cloud entity.</p>"
+            '<form method="post" action="' + _u("swap_confirm") + '">'
             '<div class="card wrap"><table>'
+            "<tr><th></th><th>name</th><th>device id</th><th></th></tr>"
             + "".join(
-                f"<tr><td>{_esc(c.name)}</td><td><code>{_esc(c.id)}</code></td>"
-                f'<td class="muted">{"online" if c.online else "offline"}</td></tr>'
+                "<tr><td>"
+                + (
+                    '<span class="ok" title="entity ids already moved">&#10003;</span>'
+                    if c.id in swapped
+                    else f'<input type="checkbox" name="device" value="{_esc(c.id)}">'
+                )
+                + f"</td><td>{_esc(c.name)}</td>"
+                f"<td><code>{_esc(c.id)}</code></td>"
+                f'<td class="muted">'
+                + ("ids moved" if c.id in swapped else ("online" if c.online else "offline"))
+                + "</td></tr>"
                 for c in result.converted
             )
             + "</table></div>"
+            + (
+                "<button>Move the entity ids across</button>"
+                if any(c.id not in swapped for c in result.converted)
+                else ""
+            )
+            + "</form>"
         )
 
     if result.cloud_only:

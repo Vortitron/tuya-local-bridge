@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.16
+
+- **Already-converted devices can have their entity ids moved too.** The offer
+  after a conversion only helped devices converted from then on; anything
+  converted earlier was stuck. The "Already on tuya-local" list now has a
+  checkbox per device and the same preview.
+- Devices whose ids have already been moved show a tick instead of a checkbox,
+  so the list says what is done rather than inviting it twice.
+
 ## 0.1.15
 
 - **Moving entity ids across is now offered in the web UI**, right after a
