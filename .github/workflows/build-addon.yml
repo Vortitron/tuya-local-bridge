@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [aarch64, amd64, armv7]
+        arch: [aarch64, amd64]
 
     steps:
       - uses: actions/checkout@v4
@@ -42,8 +42,11 @@ jobs:
 
       # The builder reads the image name and version straight out of
       # addon/config.yaml, so those stay the single source of truth.
+      # Pinned to a tag that has a matching builder image published. A newer
+      # tag can exist without one -- 2026.06.0 does -- and the pull then fails
+      # with "manifest unknown" before the build starts.
       - name: Build ${{ matrix.arch }}
-        uses: home-assistant/builder@2026.06.0
+        uses: home-assistant/builder@2026.02.1
         with:
           args: |
             --${{ matrix.arch }} \

@@ -9,8 +9,8 @@
 # provides bashio and s6, both of which run.sh depends on.
 #
 # Every architecture listed in config.yaml needs an entry, or installs fail
-# on exactly the machines not covered.
+# on exactly the machines not covered. armv7 is absent because Home Assistant
+# dropped it in 2025.12.
 build_from:
   aarch64: ghcr.io/home-assistant/aarch64-base:3.19
   amd64: ghcr.io/home-assistant/amd64-base:3.19
-  armv7: ghcr.io/home-assistant/armv7-base:3.19

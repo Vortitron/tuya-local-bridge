@@ -14,6 +14,9 @@ from tuya_local_bridge.cli import build_parser
 
 RUN_SH = pathlib.Path(__file__).resolve().parent.parent / "addon" / "run.sh"
 
+# Supervisor's default when config.yaml does not declare one.
+SUPERVISOR_DEFAULT_INGRESS_PORT = 8099
+
 
 def addon_argv():
     text = RUN_SH.read_text()
@@ -37,9 +40,15 @@ def test_the_addon_start_command_parses():
 
 @pytest.mark.skipif(not RUN_SH.exists(), reason="add-on not present")
 def test_the_addon_port_matches_the_ingress_port():
+    """Whatever the add-on serves on must be what ingress forwards to.
+
+    config.yaml deliberately does not declare ingress_port: 8099 is the
+    Supervisor default and restating it is an add-on lint error. So an absent
+    key means 8099, not "unset".
+    """
     config = (RUN_SH.parent / "config.yaml").read_text()
-    ingress_port = re.search(r"ingress_port:\s*(\d+)", config)
-    assert ingress_port, "config.yaml declares no ingress_port"
+    declared = re.search(r"ingress_port:\s*(\d+)", config)
+    ingress_port = int(declared.group(1)) if declared else SUPERVISOR_DEFAULT_INGRESS_PORT
 
     args = build_parser().parse_args(addon_argv())
-    assert args.port == int(ingress_port.group(1))
+    assert args.port == ingress_port

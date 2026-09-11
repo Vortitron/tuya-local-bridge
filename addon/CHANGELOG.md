@@ -2,6 +2,9 @@
 
 ## 0.1.13
 
+- Drops **armv7**. Home Assistant removed support for it in 2025.12, so it
+  could not be published for that architecture anyway.
+
 - Installs and updates now **pull a prebuilt image** instead of building one on
   your machine. Building locally meant every install depended on apk, PyPI and
   a `git clone` from inside your Docker build, none of which time out — when

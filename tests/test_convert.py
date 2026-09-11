@@ -171,11 +171,7 @@ class TestSetupModeStep:
             return self.replies.pop(0)
 
     def _device(self):
-        import tests.test_convert as mod
-        for name in ('make_device', 'device', '_device'):
-            if hasattr(mod, name):
-                return getattr(mod, name)()
-        pytest.skip('no device factory in this module')
+        return device()
 
     def test_the_mode_is_answered_then_the_device_fields_resent(self, monkeypatch):
         from tuya_local_bridge import convert as conv
@@ -303,16 +299,9 @@ def test_a_real_rejection_drives_the_whole_conversion(monkeypatch):
     monkeypatch.setattr(conv.requests, 'post', _post)
     client = conv.DirectFlowClient('http://ha.local', 'tok')
 
-    import tests.test_convert as mod
-    device = None
-    for name in ('make_device', 'device', '_device'):
-        if hasattr(mod, name):
-            device = getattr(mod, name)()
-            break
-    if device is None:
-        pytest.skip('no device factory in this module')
+    subject = device()
 
-    result = conv.convert(client, device, flow_id='f1')
+    result = conv.convert(client, subject, flow_id='f1')
 
     assert len(sent) == 3, f'expected reject, mode, retry — got {len(sent)} calls'
     assert 'device_id' in sent[0]
