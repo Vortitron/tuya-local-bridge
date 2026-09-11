@@ -40,7 +40,12 @@ CONF_DEVICE_CID = "device_cid"
 CONF_TYPE = "type"
 
 STEP_SELECT_TYPE = "select_type"
+# tuya-local renamed its closing step from "name" to "choose_entities" in
+# 2026.9.0. Both are listed, but the step is recognised by its shape first
+# (see _answer_name_step) so the next rename does not break conversion again.
 STEP_NAME = "name"
+STEP_CHOOSE_ENTITIES = "choose_entities"
+CLOSING_STEPS = frozenset({STEP_NAME, STEP_CHOOSE_ENTITIES})
 CONF_NAME = "name"
 CONF_SETUP_MODE = "setup_mode"
 
@@ -226,13 +231,21 @@ def _answer_name_step(
     """
     if not isinstance(step, dict) or step.get("type") != "form":
         return step
-    if step.get("step_id") != STEP_NAME or step.get("errors"):
+    if step.get("errors"):
         return step
 
     fields = _declared_fields(step)
-    if len(fields) == 1:
+    step_id = step.get("step_id")
+
+    if fields == [CONF_NAME]:
+        # A form asking for nothing but a name is the closing step, whatever
+        # it is called this release. Matching on shape rather than on step_id
+        # is what stops the next rename costing another round of "unhandled
+        # step" reports.
+        field = CONF_NAME
+    elif step_id in CLOSING_STEPS and len(fields) == 1:
         field = fields[0]
-    elif not fields:
+    elif step_id in CLOSING_STEPS and not fields:
         # No serialised schema to read; the step id is the only clue.
         field = CONF_NAME
     else:

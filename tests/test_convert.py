@@ -607,3 +607,94 @@ class TestTheClosingNameStep:
         assert result.status == "created"
         assert client.calls[0][1] == {CONF_TYPE: "Smart bulb"}
         assert client.calls[-1][1] == {"name": "bulb"}
+
+
+class TestClosingStep:
+    """The last form before the entry exists.
+
+    tuya-local renamed it from `name` to `choose_entities` in 2026.9.0, which
+    stopped every conversion one form short of a device with "unhandled step
+    'choose_entities'". Recognising it by shape rather than by step_id is what
+    stops the next rename doing the same thing.
+    """
+
+    NAME_ONLY = [{"name": "name", "required": True, "type": "string"}]
+
+    class _Client:
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.sent = []
+
+        def continue_flow(self, flow_id, user_input):
+            self.sent.append(user_input)
+            return self.replies.pop(0)
+
+    def _run(self, step_id):
+        from tuya_local_bridge import convert as conv
+
+        client = self._Client([{"type": "create_entry", "title": "bulb", "result": "E1"}])
+        step = {"type": "form", "step_id": step_id, "data_schema": self.NAME_ONLY}
+        result = conv._finish(client, "f1", step, device())
+        return client, result
+
+    def test_the_renamed_step_is_answered(self):
+        client, result = self._run("choose_entities")
+
+        assert result.ok, "choose_entities left the conversion one form short"
+        assert client.sent == [{"name": "bulb"}]
+
+    def test_the_old_name_step_still_works(self):
+        client, result = self._run("name")
+        assert result.ok
+        assert client.sent == [{"name": "bulb"}]
+
+    def test_a_step_nobody_has_seen_yet_is_answered_on_shape(self):
+        # The whole point: an unknown step_id asking only for a name is still
+        # the closing step.
+        client, result = self._run("give_it_a_name_v3")
+        assert result.ok
+        assert client.sent == [{"name": "bulb"}]
+
+    def test_a_form_wanting_more_than_a_name_is_left_alone(self):
+        from tuya_local_bridge import convert as conv
+
+        client = self._Client([])
+        step = {
+            "type": "form",
+            "step_id": "choose_entities",
+            "data_schema": [
+                {"name": "name", "required": True, "type": "string"},
+                {"name": "entities", "required": True, "type": "multi_select"},
+            ],
+        }
+        result = conv._finish(client, "f1", step, device())
+
+        assert not result.ok, "a form we do not understand must not be guessed at"
+        assert client.sent == [], "nothing should have been submitted"
+
+    def test_a_closing_step_with_no_schema_falls_back_to_the_name_field(self):
+        client, result = self._run_no_schema("choose_entities")
+        assert result.ok
+        assert client.sent == [{"name": "bulb"}]
+
+    def _run_no_schema(self, step_id):
+        from tuya_local_bridge import convert as conv
+
+        client = self._Client([{"type": "create_entry", "title": "b", "result": "E1"}])
+        step = {"type": "form", "step_id": step_id}
+        return client, conv._finish(client, "f1", step, device())
+
+    def test_errors_on_the_closing_step_are_reported_not_answered(self):
+        from tuya_local_bridge import convert as conv
+
+        client = self._Client([])
+        step = {
+            "type": "form",
+            "step_id": "choose_entities",
+            "data_schema": self.NAME_ONLY,
+            "errors": {"base": "cannot_connect"},
+        }
+        result = conv._finish(client, "f1", step, device())
+
+        assert not result.ok
+        assert client.sent == []

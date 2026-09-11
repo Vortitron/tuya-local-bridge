@@ -12,20 +12,19 @@ tuya-local already discovers Tuya devices on your LAN. Tuya's cloud already
 knows every device's `local_key`. Nothing joined the two, so people copied IDs
 and keys by hand, one device at a time, out of a developer portal that expires.
 
-> [!IMPORTANT]
-> **What is proven, and what is not.**
+> [!NOTE]
+> **Converting works, and is newly proven.** A floodlight was converted end to
+> end on a live install on 11 September 2026: local entities created, reading
+> the device over the LAN, no developer account anywhere in the process.
 >
-> Finding your devices and their local keys **works** and is what most people
-> want — it is the tedious half. Verified against real accounts: 21 devices
-> from Smart Life, 7 more from a LEDVANCE account, every one with a usable key.
->
-> **Automatic conversion is not yet confirmed on a live install.** tuya-local's
-> config flow has four steps and the bridge now answers all of them, but that
-> last step is covered by tests against a recorded flow, not by a device
-> actually converted end to end. If it stops short, copy the keys it found into
-> tuya-local by hand — that still saves you the developer portal entirely.
->
-> Reports either way are genuinely useful. Please open an issue.
+> It is still young. tuya-local's config flow has changed shape twice in recent
+> releases — a `setup_mode` step appeared, and the closing step was renamed
+> from `name` to `choose_entities` — and each time conversion stopped one form
+> short until the bridge caught up. The bridge now recognises that closing step
+> by its shape rather than its name, so a rename alone should not break it
+> again. If yours stops on an unhandled step, that is a bug worth
+> [reporting](https://github.com/Vortitron/tuya-local-bridge/issues) — and
+> meanwhile the keys it found can be pasted into tuya-local by hand.
 
 ## Why not the Tuya developer portal
 

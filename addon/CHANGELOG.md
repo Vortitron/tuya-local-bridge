@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.14
+
+- Answers tuya-local's closing step after it was renamed from `name` to
+  `choose_entities` in 2026.9.0, which stopped conversion one form short of a
+  device with "unhandled step 'choose_entities'".
+- That step is now recognised by its shape — a form asking for nothing but a
+  name — rather than by its id, so the next rename should not break it.
+- **A device has now been converted end to end on a live install.**
+
 ## 0.1.13
 
 - Drops **armv7**. Home Assistant removed support for it in 2025.12, so it
