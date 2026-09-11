@@ -32,7 +32,9 @@ from .store import ProvenanceStore
 from .swap import (
     DirectEntityRegistry,
     VomeHomeEntityRegistry,
+    add_manual_pairs,
     apply_swap,
+    candidates_for,
     entities_for_device,
     plan_swap,
 )
@@ -260,7 +262,7 @@ def create_app(
                 entities_for_device(entities, mapping["tuya"]),
                 entities_for_device(entities, mapping["tuya_local"]),
             )
-            if plan.is_empty:
+            if plan.is_empty and not plan.cloud_unmatched:
                 problems.append((tuya_id, "nothing pairs up to swap"))
                 continue
             plans.append((tuya_id, plan))
@@ -648,8 +650,17 @@ def create_app(
         registry, plans, problems = swap_plans(chosen)
         store = ProvenanceStore(store_path)
 
+        # Pairings the person chose on the preview, keyed by cloud entity.
+        choices = {
+            key[len("pair__") :]: value
+            for key, value in request.form.items()
+            if key.startswith("pair__") and value
+        }
+
         done, failed = [], list(problems)
         for tuya_id, plan in plans:
+            for cloud_id, why in add_manual_pairs(plan, choices).items():
+                failed.append((cloud_id, why))
             try:
                 results = apply_swap(registry, plan, store, tuya_id)
             except Exception as exc:
@@ -742,47 +753,94 @@ def create_app(
 
 
 def _render_swap_preview(plans, problems) -> str:
-    """What the swap would do, device by device."""
-    parts: list[str] = []
+    """What the swap would do, device by device, and what it needs asking.
 
-    if plans:
-        rows = "".join(
-            f"<tr><td><code>{_esc(pair.local_entity_id)}</code></td>"
-            f'<td class="muted">becomes</td>'
-            f"<td><code>{_esc(pair.cloud_entity_id)}</code></td></tr>"
-            for _tuya_id, plan in plans
-            for pair in plan.pairs
-        )
-        unmatched = [
-            entity_id
-            for _tuya_id, plan in plans
+    Everything lives in one form so a pairing chosen here travels with the
+    button that applies it.
+    """
+    parts: list[str] = [
+        '<form method="post" action="' + _u("swap_apply") + '" '
+        'data-working="Moving entity ids —">'
+    ]
+
+    any_pairs = False
+    any_choices = False
+    notes: list[str] = []
+
+    for tuya_id, plan in plans:
+        parts.append(f'<input type="hidden" name="device" value="{_esc(tuya_id)}">')
+
+        if plan.pairs:
+            any_pairs = True
+            rows = "".join(
+                f"<tr><td><code>{_esc(pair.local_entity_id)}</code></td>"
+                f'<td class="muted">becomes</td>'
+                f"<td><code>{_esc(pair.cloud_entity_id)}</code></td></tr>"
+                for pair in plan.pairs
+            )
+            parts.append(
+                f'<div class="card wrap"><table>'
+                f"<tr><th>local entity</th><th></th><th>takes this id</th></tr>"
+                f"{rows}</table></div>"
+            )
+
+        # Anything the matcher would not guess at becomes a question.
+        undecided = [
+            (entity_id, candidates_for(plan, entity_id))
             for entity_id in plan.cloud_unmatched
         ]
-        parts.append(
-            "<p>The local entity takes the id the cloud one had, so anything "
-            "referring to it keeps working untouched. The cloud entity is "
-            "renamed with a <code>_cloud</code> suffix and disabled.</p>"
-            f'<div class="card wrap"><table>'
-            f"<tr><th>local entity</th><th></th><th>takes this id</th></tr>"
-            f"{rows}</table></div>"
-        )
-        if unmatched:
+        askable = [(e, c) for e, c in undecided if c]
+        stranded = [e for e, c in undecided if not c]
+
+        if askable:
+            any_choices = True
+            rows = "".join(
+                f"<tr><td><code>{_esc(entity_id)}</code></td>"
+                f'<td class="muted">taken over by</td><td>'
+                f'<select name="pair__{_esc(entity_id)}">'
+                '<option value="">leave it on the cloud</option>'
+                + "".join(
+                    f'<option value="{_esc(c)}">{_esc(c)}</option>' for c in cands
+                )
+                + "</select></td></tr>"
+                for entity_id, cands in askable
+            )
             parts.append(
+                '<div class="note"><b>These need you to decide.</b> The two '
+                "integrations name them differently, and guessing could put a "
+                "switch on the wrong relay — so pick the local entity that "
+                "matches, or leave it alone.</div>"
+                f'<div class="card wrap"><table>'
+                f"<tr><th>cloud entity</th><th></th><th>local entity</th></tr>"
+                f"{rows}</table></div>"
+            )
+
+        if stranded:
+            notes.append(
                 '<div class="note"><b>Left on the cloud.</b> These have no local '
-                "counterpart, so anything using them still goes through Tuya:<br>"
-                + "<br>".join(f"<code>{_esc(e)}</code>" for e in unmatched)
+                "counterpart at all, so anything using them still goes through "
+                "Tuya:<br>"
+                + "<br>".join(f"<code>{_esc(e)}</code>" for e in stranded)
                 + "</div>"
             )
-        parts.append(
-            '<form method="post" action="'
-            + _u("swap_apply")
-            + '" data-working="Moving entity ids —">'
-            + "".join(
-                f'<input type="hidden" name="device" value="{_esc(tuya_id)}">'
-                for tuya_id, _plan in plans
-            )
-            + "<button>Move the ids</button></form>"
+
+    if any_pairs or any_choices:
+        parts.insert(
+            1,
+            "<p>The local entity takes the id the cloud one had, so anything "
+            "referring to it keeps working untouched. The cloud entity is "
+            "renamed with a <code>_cloud</code> suffix and disabled.</p>",
         )
+        parts.append("<button>Move the ids</button>")
+    parts.append("</form>")
+    parts.extend(notes)
+
+    if not (any_pairs or any_choices):
+        # Nothing can be done, but why is worth saying: a device whose cloud
+        # entities have no local counterpart is a different situation from one
+        # that is already swapped, and the notes are the only thing that says
+        # which this is.
+        parts = notes or ['<div class="note">Nothing to swap.</div>']
 
     if problems:
         parts.append(
@@ -795,8 +853,6 @@ def _render_swap_preview(plans, problems) -> str:
             + "</table></div>"
         )
 
-    if not parts:
-        parts.append('<div class="note">Nothing to swap.</div>')
     parts.append(f'<p><a href="{_u("index")}">Back to status</a></p>')
     return "".join(parts)
 

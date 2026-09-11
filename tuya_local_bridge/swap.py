@@ -200,6 +200,64 @@ def plan_swap(
     return plan
 
 
+def domain_of(entity_id: str) -> str:
+    """The bit before the dot: ``switch.hot_water`` -> ``switch``."""
+    return str(entity_id).split(".", 1)[0] if "." in str(entity_id) else ""
+
+
+def candidates_for(plan: SwapPlan, cloud_entity_id: str) -> list[str]:
+    """Local entities that could reasonably take ``cloud_entity_id``'s place.
+
+    Same domain, not already spoken for. Crossing domains is not offered
+    because Home Assistant would refuse the rename anyway.
+    """
+    domain = domain_of(cloud_entity_id)
+    return [e for e in plan.local_unmatched if domain_of(e) == domain]
+
+
+def add_manual_pairs(plan: SwapPlan, choices: dict[str, str]) -> dict[str, str]:
+    """Fold the user's own pairings into a plan. Returns anything refused.
+
+    The automatic matcher deliberately gives up where a domain holds several
+    entities on each side and the names do not correspond -- a plug whose cloud
+    switches are "Socket 1" and "Child lock" against local ones called nothing
+    and "Overcharge protection". Guessing there would put a switch on the wrong
+    relay. But the person looking at the screen knows which is which, so the
+    answer is to ask rather than to refuse outright.
+
+    Every choice is still checked: the entities must be the ones actually
+    offered, must share a domain, and must not already be paired. A stale form
+    submitted twice cannot pair the same entity into two places.
+    """
+    refused: dict[str, str] = {}
+    for cloud_id, local_id in (choices or {}).items():
+        if not local_id:
+            continue
+        if cloud_id not in plan.cloud_unmatched:
+            refused[cloud_id] = "no longer needs a pairing"
+            continue
+        if local_id not in plan.local_unmatched:
+            refused[cloud_id] = "that local entity is already spoken for"
+            continue
+        if domain_of(cloud_id) != domain_of(local_id):
+            refused[cloud_id] = "those are different kinds of entity"
+            continue
+
+        plan.pairs.append(
+            EntityPair(
+                cloud_entity_id=cloud_id,
+                local_entity_id=local_id,
+                domain=domain_of(cloud_id),
+                name=None,
+            )
+        )
+        plan.cloud_unmatched.remove(cloud_id)
+        plan.local_unmatched.remove(local_id)
+
+    plan.pairs.sort(key=lambda p: p.cloud_entity_id)
+    return refused
+
+
 def apply_swap(
     registry: EntityRegistry,
     plan: SwapPlan,

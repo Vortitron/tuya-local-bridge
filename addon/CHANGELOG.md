@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.20
+
+- **Where the matcher will not guess, it now asks.** A plug's cloud switches
+  are "Socket 1" and "Child lock" while tuya-local calls its own nothing and
+  "Overcharge protection" — nothing to match on, and guessing could put a
+  switch on the wrong relay. The preview now offers a dropdown of the sensible
+  local entities for each one, so the main switch can be paired in one click
+  instead of being refused.
+- Entities with no local counterpart at all still say so plainly rather than
+  being offered a choice that does not exist.
+- The add-on description no longer says conversion is unconfirmed. It has been
+  confirmed on a live install since 0.1.14, and the add-on page had been
+  saying otherwise ever since.
+
 ## 0.1.19
 
 - **Finds the right device when several claim the same Tuya id.** An

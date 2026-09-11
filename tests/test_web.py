@@ -235,3 +235,54 @@ def test_scan_errors_are_escaped():
         reconcile([], []), {}, [], scan_enabled=True, scan_error='<script>alert("x")</script>'
     )
     assert "<script>" not in html
+
+
+# ── Asking, where the matcher will not guess ───────────────────────────────
+
+def _plan_with_choice():
+    """A plug: two switches each side, names that do not correspond."""
+    from tuya_local_bridge.swap import plan_swap
+
+    return plan_swap(
+        [
+            {"entity_id": "switch.plug_socket_1", "original_name": "Socket 1"},
+            {"entity_id": "switch.plug_child_lock", "original_name": "Child lock"},
+        ],
+        [
+            {"entity_id": "switch.hot_water", "original_name": None},
+            {"entity_id": "switch.hot_water_overcharge", "original_name": "Overcharge protection"},
+        ],
+    )
+
+
+def test_undecidable_entities_become_a_question():
+    html = _render_swap_preview([("abc", _plan_with_choice())], [])
+
+    assert "These need you to decide" in html
+    assert 'name="pair__switch.plug_socket_1"' in html
+    # Both local switches must be offered as options.
+    assert "switch.hot_water_overcharge" in html
+    assert ">leave it on the cloud<" in html
+
+
+def test_the_question_and_the_button_are_in_one_form():
+    # A choice made here has to travel with the button that applies it.
+    html = _render_swap_preview([("abc", _plan_with_choice())], [])
+
+    assert html.count("<form") == 1
+    assert html.index("pair__switch.plug_socket_1") < html.index("<button>")
+
+
+def test_a_device_needing_only_choices_still_offers_the_button():
+    html = _render_swap_preview([("abc", _plan_with_choice())], [])
+    assert "Move the ids" in html
+
+
+def test_entities_with_no_candidate_at_all_are_not_offered_a_dropdown():
+    from tuya_local_bridge.swap import plan_swap
+
+    plan = plan_swap([{"entity_id": "sensor.only_cloud", "original_name": "Signal"}], [])
+    html = _render_swap_preview([("abc", plan)], [])
+
+    assert "Left on the cloud" in html
+    assert "pair__" not in html

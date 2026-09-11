@@ -4,17 +4,17 @@ Finds the local keys for your Tuya devices — **without a Tuya developer accoun
 or an IoT Core subscription** — and lines them up against what
 [tuya-local](https://github.com/make-all/tuya-local) can see on your network.
 
-## What is proven, and what is not
+## What it does
 
-Finding your devices and their local keys **works**, and it is the tedious half.
+1. Finds every Tuya device on your account and its local key, from a QR-code
+   login — no developer account, no cloud project, no subscription.
+2. Matches those against what is actually on your network.
+3. Converts them to tuya-local, and **moves the entity ids across** so your
+   automations keep working rather than quietly pointing at a dead device.
 
-**Automatic conversion is not yet confirmed on a live install.** The bridge
-answers every step of tuya-local's config flow, but the last of those steps is
-covered by tests against a recorded flow rather than by a device actually
-converted end to end. If it stops short, copy the keys it found into tuya-local
-by hand — you still skip the developer portal entirely.
-
-Please [report either outcome](https://github.com/Vortitron/tuya-local-bridge/issues).
+Converting has been confirmed end to end on a live install. Where the two
+integrations name things differently the bridge asks rather than guesses, so
+some devices need one choice from you before the ids move.
 
 ## Use
 

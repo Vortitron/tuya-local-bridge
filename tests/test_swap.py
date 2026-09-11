@@ -263,3 +263,95 @@ class TestNamesThatDoNotAgree:
     def test_a_cloud_entity_with_no_local_domain_at_all(self):
         plan = plan_swap([ent("sensor.cloud_only", "Signal")], [ent("switch.x")])
         assert plan.cloud_unmatched == ["sensor.cloud_only"]
+
+
+class TestChoosingPairsByHand:
+    """Where the matcher gives up, the person at the screen knows the answer.
+
+    A plug's cloud switches are "Socket 1" and "Child lock"; tuya-local calls
+    its own nothing and "Overcharge protection". Guessing would put a switch
+    on the wrong relay, so the bridge asks instead of refusing outright.
+    """
+
+    def plan(self):
+        from tuya_local_bridge.swap import plan_swap
+
+        cloud = [
+            ent("switch.plug_socket_1", "Socket 1"),
+            ent("switch.plug_child_lock", "Child lock"),
+        ]
+        local = [
+            ent("switch.hot_water"),
+            ent("switch.hot_water_overcharge", "Overcharge protection"),
+        ]
+        p = plan_swap(cloud, local)
+        assert p.pairs == [], "these must not pair automatically"
+        return p
+
+    def test_a_chosen_pairing_is_accepted(self):
+        from tuya_local_bridge.swap import add_manual_pairs
+
+        plan = self.plan()
+        refused = add_manual_pairs(plan, {"switch.plug_socket_1": "switch.hot_water"})
+
+        assert refused == {}
+        assert len(plan.pairs) == 1
+        assert plan.pairs[0].local_entity_id == "switch.hot_water"
+        # And it is no longer on offer for anything else.
+        assert "switch.plug_socket_1" not in plan.cloud_unmatched
+        assert "switch.hot_water" not in plan.local_unmatched
+
+    def test_only_same_domain_entities_are_offered(self):
+        from tuya_local_bridge.swap import candidates_for, plan_swap
+
+        p = plan_swap(
+            [ent("switch.a", "Socket 1"), ent("sensor.b", "Signal")],
+            [ent("switch.x"), ent("switch.y", "Other"), ent("light.z")],
+        )
+        offered = candidates_for(p, "switch.a")
+
+        assert all(c.startswith("switch.") for c in offered)
+        assert "light.z" not in offered
+
+    def test_crossing_domains_is_refused(self):
+        from tuya_local_bridge.swap import add_manual_pairs
+
+        plan = self.plan()
+        refused = add_manual_pairs(plan, {"switch.plug_socket_1": "light.something"})
+
+        assert "switch.plug_socket_1" in refused
+        assert plan.pairs == []
+
+    def test_the_same_local_entity_cannot_be_used_twice(self):
+        # A stale form submitted twice must not pair one entity into two slots.
+        from tuya_local_bridge.swap import add_manual_pairs
+
+        plan = self.plan()
+        refused = add_manual_pairs(
+            plan,
+            {
+                "switch.plug_socket_1": "switch.hot_water",
+                "switch.plug_child_lock": "switch.hot_water",
+            },
+        )
+
+        assert len(plan.pairs) == 1
+        assert "switch.plug_child_lock" in refused
+
+    def test_an_empty_choice_is_simply_skipped(self):
+        from tuya_local_bridge.swap import add_manual_pairs
+
+        plan = self.plan()
+        assert add_manual_pairs(plan, {"switch.plug_socket_1": ""}) == {}
+        assert plan.pairs == []
+        assert "switch.plug_socket_1" in plan.cloud_unmatched
+
+    def test_a_choice_for_something_already_paired_is_refused(self):
+        from tuya_local_bridge.swap import add_manual_pairs, plan_swap
+
+        p = plan_swap([ent("light.a")], [ent("light.b")])
+        assert len(p.pairs) == 1
+
+        refused = add_manual_pairs(p, {"light.a": "light.b"})
+        assert "light.a" in refused
+        assert len(p.pairs) == 1
