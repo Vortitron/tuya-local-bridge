@@ -234,9 +234,13 @@ def create_app(
             raw = ha_discovery.device_registry_vomehome(
                 instance_id, vomehome_token, api_url
             )
+            owners = ha_discovery.config_entry_domains_vomehome(
+                instance_id, vomehome_token, api_url
+            )
         else:
             raw = ha_discovery.device_registry_direct(ha_url or "", ha_token or "")
-        return ha_discovery.map_devices(raw)
+            owners = ha_discovery.config_entry_domains_direct(ha_url or "", ha_token or "")
+        return ha_discovery.map_devices(raw, entry_domains=owners)
 
     def swap_plans(device_ids):
         """(plans, problems) for the devices asked about."""

@@ -324,12 +324,18 @@ def _registry_and_devices(args):
     if target.kind == "direct":
         return (
             DirectEntityRegistry(target.url, target.token),
-            hd.map_devices(hd.device_registry_direct(target.url, target.token)),
+            hd.map_devices(
+                hd.device_registry_direct(target.url, target.token),
+                entry_domains=hd.config_entry_domains_direct(target.url, target.token),
+            ),
         )
     return (
         VomeHomeEntityRegistry(target.instance, target.token, target.api_url),
         hd.map_devices(
-            hd.device_registry_vomehome(target.instance, target.token, target.api_url)
+            hd.device_registry_vomehome(target.instance, target.token, target.api_url),
+            entry_domains=hd.config_entry_domains_vomehome(
+                target.instance, target.token, target.api_url
+            ),
         ),
     )
 

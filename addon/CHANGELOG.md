@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.19
+
+- **Finds the right device when several claim the same Tuya id.** An
+  identifier is a claim rather than a title: any integration can attach itself
+  to a device by reusing it, and helpers that derive energy sensors do exactly
+  that. Three devices shared one id on a real install, and the bridge picked
+  the helper — so it hunted for a plug's switch among generated energy sensors
+  and reported "nothing pairs up to swap" for a device that had four perfectly
+  good pairs. It now picks the device whose own config entry belongs to the
+  integration in question.
+
 ## 0.1.18
 
 - **Plugs can have their entity ids moved.** Tuya's cloud calls a plug's only

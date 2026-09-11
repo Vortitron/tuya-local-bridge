@@ -110,14 +110,28 @@ def map_devices(
     entries: Iterable[dict[str, Any]],
     *,
     domains: tuple[str, ...] = ("tuya", TUYA_LOCAL_DOMAIN),
+    entry_domains: dict[str, str] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Map each Tuya device id to the Home Assistant devices representing it.
 
     A converted device exists twice — once from the cloud integration and once
     from tuya-local — both carrying the same Tuya id in their identifiers. That
     pairing is what makes the entity swap possible.
+
+    More than two can carry it, though. An identifier is a claim, not a title:
+    any integration may reuse ``("tuya", <id>)`` to attach itself to a device,
+    and helpers that derive sensors from a device do exactly that. One real
+    install had three devices on one id — the Tuya device, an energy-sensor
+    helper, and tuya-local — and picking the wrong one meant looking for a
+    plug's switch among generated energy sensors and reporting, wrongly, that
+    nothing paired up.
+
+    ``entry_domains`` maps config-entry id to the integration that owns it, and
+    resolves the tie properly: the device whose own config entry is ``tuya`` is
+    the Tuya device. Without it the first claimant wins, which is the old
+    behaviour and is right whenever nothing else has staked a claim.
     """
-    mapping: dict[str, dict[str, str]] = {}
+    candidates: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for entry in entries or []:
         if not isinstance(entry, dict) or not entry.get("id"):
             continue
@@ -126,8 +140,58 @@ def map_devices(
                 continue
             domain, tuya_id = identifier[0], str(identifier[1])
             if domain in domains and tuya_id:
-                mapping.setdefault(tuya_id, {})[domain] = str(entry["id"])
+                candidates.setdefault((tuya_id, domain), []).append(entry)
+
+    mapping: dict[str, dict[str, str]] = {}
+    for (tuya_id, domain), devices in candidates.items():
+        owned = [
+            d
+            for d in devices
+            if (entry_domains or {}).get(d.get("primary_config_entry") or "") == domain
+        ]
+        chosen = owned[0] if owned else devices[0]
+        mapping.setdefault(tuya_id, {})[domain] = str(chosen["id"])
     return mapping
+
+
+def config_entry_domains_direct(base_url: str, token: str) -> dict[str, str]:
+    """Config-entry id -> owning integration, straight from Home Assistant."""
+    response = requests.get(
+        f"{base_url.rstrip('/')}/api/config/config_entries/entry",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        timeout=DEFAULT_TIMEOUT,
+    )
+    if not response.ok:
+        logger.warning("could not read config entries: %s", response.status_code)
+        return {}
+    return _entry_domains(response.json())
+
+
+def config_entry_domains_vomehome(
+    instance_id: str, token: str, api_url: str = "https://vome.io",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, str]:
+    """Config-entry id -> owning integration, through the VomeHome broker."""
+    url = (
+        f"{api_url.rstrip('/')}/api/v1/instances/{quote(instance_id)}"
+        f"/ha/config/config_entries/entry"
+    )
+    response = requests.get(
+        url, headers={"Authorization": f"Bearer {token}"}, timeout=timeout
+    )
+    if not response.ok:
+        logger.warning("could not read config entries: %s", response.status_code)
+        return {}
+    return _entry_domains(response.json())
+
+
+def _entry_domains(payload: Any) -> dict[str, str]:
+    rows = payload if isinstance(payload, list) else (payload or {}).get("entries") or []
+    return {
+        str(r["entry_id"]): str(r.get("domain") or "")
+        for r in rows
+        if isinstance(r, dict) and r.get("entry_id")
+    }
 
 
 def device_registry_vomehome(

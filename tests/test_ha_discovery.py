@@ -185,3 +185,82 @@ class TestProxyRefusesRest:
         monkeypatch.setattr(ha_ws, 'command', _boom)
         with pytest.raises(ha_discovery.HaDiscoveryError, match='auth failed'):
             ha_discovery.from_home_assistant('http://supervisor/core', 'tok')
+
+
+class TestSeveralDevicesClaimingOneId:
+    """An identifier is a claim, not a title.
+
+    Any integration may attach itself to a device by reusing its identifier,
+    and helpers that derive sensors do exactly that. One real install had
+    three devices on a single Tuya id — the Tuya device, an energy-sensor
+    helper, and tuya-local. Picking the helper meant hunting for a plug's
+    switch among generated energy sensors and reporting that nothing paired.
+    """
+
+    REGISTRY = [
+        {
+            "id": "ha_real_tuya",
+            "identifiers": [["tuya", "bfed759f"]],
+            "primary_config_entry": "entry_tuya",
+        },
+        {
+            "id": "ha_energy_helper",
+            "identifiers": [["tuya", "bfed759f"]],
+            "primary_config_entry": "entry_energy",
+        },
+        {
+            "id": "ha_local",
+            "identifiers": [["tuya_local", "bfed759f"]],
+            "primary_config_entry": "entry_local",
+        },
+    ]
+    OWNERS = {
+        "entry_tuya": "tuya",
+        "entry_energy": "energy_sensor_generator",
+        "entry_local": "tuya_local",
+    }
+
+    def test_the_integration_that_owns_the_entry_wins(self):
+        from tuya_local_bridge.ha_discovery import map_devices
+
+        mapping = map_devices(self.REGISTRY, entry_domains=self.OWNERS)
+
+        assert mapping["bfed759f"]["tuya"] == "ha_real_tuya"
+        assert mapping["bfed759f"]["tuya_local"] == "ha_local"
+
+    def test_the_helper_wins_if_it_happens_to_be_listed_first(self):
+        # Without the owner map this is the coin toss that caused the bug.
+        from tuya_local_bridge.ha_discovery import map_devices
+
+        reordered = [self.REGISTRY[1], self.REGISTRY[0], self.REGISTRY[2]]
+        assert map_devices(reordered)["bfed759f"]["tuya"] == "ha_energy_helper"
+        assert (
+            map_devices(reordered, entry_domains=self.OWNERS)["bfed759f"]["tuya"]
+            == "ha_real_tuya"
+        )
+
+    def test_an_unknown_entry_falls_back_to_the_first_claimant(self):
+        from tuya_local_bridge.ha_discovery import map_devices
+
+        mapping = map_devices(self.REGISTRY, entry_domains={"entry_other": "x"})
+        assert mapping["bfed759f"]["tuya"] == "ha_real_tuya"
+
+    def test_a_single_claimant_needs_no_tie_breaking(self):
+        from tuya_local_bridge.ha_discovery import map_devices
+
+        mapping = map_devices([self.REGISTRY[0], self.REGISTRY[2]])
+        assert mapping["bfed759f"] == {"tuya": "ha_real_tuya", "tuya_local": "ha_local"}
+
+
+def test_entry_domains_parses_a_config_entry_listing():
+    from tuya_local_bridge.ha_discovery import _entry_domains
+
+    rows = [
+        {"entry_id": "e1", "domain": "tuya"},
+        {"entry_id": "e2", "domain": "tuya_local"},
+        {"no_entry_id": True},
+        "junk",
+    ]
+    assert _entry_domains(rows) == {"e1": "tuya", "e2": "tuya_local"}
+    assert _entry_domains({"entries": rows}) == {"e1": "tuya", "e2": "tuya_local"}
+    assert _entry_domains(None) == {}
