@@ -145,3 +145,36 @@ def test_the_three_version_numbers_agree():
         f'__version__ says {tuya_local_bridge.__version__}, '
         f'add-on says {addon_version}'
     )
+
+
+def test_the_image_is_prebuilt_and_lower_case():
+    """Users pull an image rather than building one.
+
+    Building on the user's machine made every install depend on apk, PyPI and
+    a git clone from inside their Docker build, none of which time out. One
+    stall hung the install at 0% with no error and survived a Home Assistant
+    restart, because add-on jobs belong to the Supervisor rather than Core.
+
+    The lower-case check is not pedantry: the GitHub owner is "Vortitron" but
+    a registry path with a capital in it 404s on pull, and the only symptom is
+    an install that fails for everyone except whoever built it locally.
+    """
+    image = _load('config.yaml').get('image')
+    assert image, 'config.yaml declares no image, so Supervisor will build locally'
+    assert '{arch}' in image, 'the image must vary by architecture'
+    assert image == image.lower(), f'{image} has upper case in it and will not pull'
+
+
+def test_every_architecture_has_somewhere_to_pull_from():
+    """A machine offered in `arch` must also be built by the workflow."""
+    import re
+
+    workflow = (ADDON.parent / '.github' / 'workflows' / 'build-addon.yml').read_text()
+    matrix = re.search(r'arch:\s*\[([^\]]+)\]', workflow)
+    assert matrix, 'the build workflow declares no architecture matrix'
+
+    built = {a.strip() for a in matrix.group(1).split(',')}
+    offered = set(_load('config.yaml')['arch'])
+    assert not offered - built, (
+        f'config.yaml offers {sorted(offered - built)} with no published image'
+    )

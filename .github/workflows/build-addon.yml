@@ -1,0 +1,51 @@
+name: Build add-on
+
+# Publishes a prebuilt image per architecture, so installing the add-on is a
+# pull rather than a build.
+#
+# Building on the user's machine meant every install depended on apk, PyPI and
+# a `git clone` from inside their Docker build, none of which have a timeout.
+# When one stalled the install hung at 0% with no error, survived a Home
+# Assistant restart (add-on jobs belong to the Supervisor, not Core), and left
+# the box unresponsive. That is not something to hand to strangers.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "addon/**"
+      - "tuya_local_bridge/**"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, amd64, armv7]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The builder reads the image name and version straight out of
+      # addon/config.yaml, so those stay the single source of truth.
+      - name: Build ${{ matrix.arch }}
+        uses: home-assistant/builder@2026.06.0
+        with:
+          args: |
+            --${{ matrix.arch }} \
+            --target /data/addon \
+            --addon

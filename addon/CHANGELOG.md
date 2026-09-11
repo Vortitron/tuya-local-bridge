@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.13
+
+- Installs and updates now **pull a prebuilt image** instead of building one on
+  your machine. Building locally meant every install depended on apk, PyPI and
+  a `git clone` from inside your Docker build, none of which time out — when
+  one stalled, the install sat at 0% with no error and survived a Home
+  Assistant restart, because add-on jobs belong to the Supervisor rather than
+  Core.
+
 ## 0.1.12
 
 - Works without VomeHome. A direct Home Assistant connection is now the

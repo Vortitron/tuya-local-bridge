@@ -56,9 +56,10 @@ Or by hand: **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, 
 `https://github.com/Vortitron/tuya-local-bridge`, then install **Tuya Local
 Bridge** and open it from the sidebar.
 
-It runs on host networking so it can hear device broadcasts, and authenticates
-with the Supervisor token — there is nothing to configure beyond your Smart Life
-User Code.
+Installing pulls a prebuilt image, so there is nothing to compile on your
+machine and it takes seconds. It runs on host networking so it can hear device
+broadcasts, and authenticates with the Supervisor token — there is nothing to
+configure beyond your Smart Life User Code.
 
 > This is an **add-on**, not a HACS integration, so it is added as an add-on
 > repository rather than through HACS. HACS does not install add-ons.
