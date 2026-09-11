@@ -114,6 +114,11 @@ def plan_swap(
 ) -> SwapPlan:
     """Work out which local entity should take over which cloud entity id.
 
+    Matching happens in two passes: on ``(domain, name)`` first, then on the
+    domain alone where it is unambiguous on both sides. The second pass exists
+    because the two integrations do not always name the same thing alike --
+    see below.
+
     Disabled entities are skipped by default: tuya-local disables most of its
     auxiliary entities, and renaming something the user never enabled is churn
     with no benefit.
@@ -136,29 +141,61 @@ def plan_swap(
 
     plan = SwapPlan()
     claimed: set[str] = set()
+    leftover: list[dict[str, Any]] = []
 
-    for entity in cloud:
-        key = _key(entity)
-        candidates = local_by_key.get(key) or []
-        if len(candidates) != 1:
-            # Zero means tuya-local does not expose it; more than one is
-            # ambiguous. Either way, guessing would be worse than reporting.
-            plan.cloud_unmatched.append(str(entity["entity_id"]))
-            continue
-        match = candidates[0]
-        claimed.add(str(match["entity_id"]))
+    def pair(cloud_entity, local_entity) -> None:
+        claimed.add(str(local_entity["entity_id"]))
         plan.pairs.append(
             EntityPair(
-                cloud_entity_id=str(entity["entity_id"]),
-                local_entity_id=str(match["entity_id"]),
-                domain=key[0],
-                name=entity.get("original_name"),
+                cloud_entity_id=str(cloud_entity["entity_id"]),
+                local_entity_id=str(local_entity["entity_id"]),
+                domain=_key(cloud_entity)[0],
+                name=cloud_entity.get("original_name"),
             )
         )
+
+    for entity in cloud:
+        candidates = local_by_key.get(_key(entity)) or []
+        unclaimed = [c for c in candidates if str(c["entity_id"]) not in claimed]
+        if len(unclaimed) == 1:
+            pair(entity, unclaimed[0])
+        else:
+            leftover.append(entity)
+
+    # Second pass, by domain alone. The two integrations do not always agree on
+    # a name for the same thing -- Tuya's cloud calls a plug's only switch
+    # "Socket 1" while tuya-local leaves the primary entity unnamed -- so
+    # matching on the name misses the single most common device there is.
+    #
+    # Safe only when the domain is unambiguous on both sides: exactly one
+    # unmatched cloud entity and exactly one unclaimed local entity. Where a
+    # domain holds several of either (a plug's four power sensors, say) there
+    # is a real choice to make and guessing would put readings on the wrong
+    # sensor, so those are still reported rather than paired.
+    by_domain_cloud: dict[str, list[dict[str, Any]]] = {}
+    for entity in leftover:
+        by_domain_cloud.setdefault(_key(entity)[0], []).append(entity)
+
+    by_domain_local: dict[str, list[dict[str, Any]]] = {}
+    for entity in local:
+        if str(entity["entity_id"]) not in claimed:
+            by_domain_local.setdefault(_key(entity)[0], []).append(entity)
+
+    for entity in leftover:
+        domain = _key(entity)[0]
+        locals_here = [
+            e for e in by_domain_local.get(domain, [])
+            if str(e["entity_id"]) not in claimed
+        ]
+        if len(by_domain_cloud.get(domain, [])) == 1 and len(locals_here) == 1:
+            pair(entity, locals_here[0])
+        else:
+            plan.cloud_unmatched.append(str(entity["entity_id"]))
 
     plan.local_unmatched = [
         str(e["entity_id"]) for e in local if str(e["entity_id"]) not in claimed
     ]
+    plan.cloud_unmatched.sort()
     plan.pairs.sort(key=lambda p: p.cloud_entity_id)
     return plan
 

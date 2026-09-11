@@ -184,7 +184,12 @@ tuya-local-bridge swap --dry-run <device-id>
 ```
 
 This moves the entity id across, so `light.front_porch` keeps meaning what it
-always meant. Always dry-run first: if you converted a device by hand and gave
+always meant.
+
+**Your recorded history follows the old entity, not the id.** Home Assistant
+migrates history when an entity is renamed, so the cloud device's past lives on
+under `light.front_porch_cloud` and the graph on the swapped device starts from
+the conversion. Nothing is lost, but it is no longer under the name you expect. Always dry-run first: if you converted a device by hand and gave
 it a better name than the cloud did, a swap would undo that. Nothing is swapped
 unless you name it or pass `--all`, and every swap can be rolled back.
 

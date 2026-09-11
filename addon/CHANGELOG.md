@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.18
+
+- **Plugs can have their entity ids moved.** Tuya's cloud calls a plug's only
+  switch "Socket 1" while tuya-local leaves the primary entity unnamed, so
+  matching on the name reported "no entries to match with" for the most
+  common device there is. Entities now also pair on the domain alone where it
+  is unambiguous — exactly one on each side. Where a domain holds several of
+  either, they are still reported rather than guessed at, because putting
+  readings on the wrong sensor is worse than saying nothing.
+
 ## 0.1.17
 
 - **Auto-heal**, on by default every 6 hours (`heal_interval_hours`, 0 to turn

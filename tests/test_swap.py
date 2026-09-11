@@ -199,3 +199,67 @@ def test_rollback_survives_the_store_being_reloaded(tmp_path):
 
     reloaded = ProvenanceStore(path)
     assert [r.status for r in rollback(FakeRegistry(), reloaded, "abc")] == ["rolled_back"]
+
+
+class TestNamesThatDoNotAgree:
+    """The two integrations do not always call the same thing the same name.
+
+    Tuya's cloud names a plug's only switch "Socket 1"; tuya-local leaves the
+    primary entity unnamed. Matching on the name alone therefore missed the
+    single most common device there is, and reported "no entries to match
+    with" for a plug that plainly had one.
+    """
+
+    def test_a_plugs_switch_pairs_despite_the_different_name(self):
+        cloud = [ent("switch.smart_plug_2_socket_1", "Socket 1")]
+        local = [ent("switch.hot_water_local")]
+
+        plan = plan_swap(cloud, local)
+
+        assert len(plan.pairs) == 1
+        assert plan.pairs[0].cloud_entity_id == "switch.smart_plug_2_socket_1"
+        assert plan.pairs[0].local_entity_id == "switch.hot_water_local"
+
+    def test_an_exact_name_match_still_wins_over_the_domain_fallback(self):
+        # Two switches on each side: names must decide, not order.
+        cloud = [ent("switch.a_power", "Power"), ent("switch.a_lock", "Child lock")]
+        local = [ent("switch.b_lock", "Child lock"), ent("switch.b_power", "Power")]
+
+        plan = plan_swap(cloud, local)
+
+        by_cloud = {p.cloud_entity_id: p.local_entity_id for p in plan.pairs}
+        assert by_cloud["switch.a_power"] == "switch.b_power"
+        assert by_cloud["switch.a_lock"] == "switch.b_lock"
+
+    def test_several_in_one_domain_is_still_left_alone(self):
+        # A plug's four power sensors: guessing would put readings on the wrong
+        # one, which is worse than saying nothing.
+        cloud = [ent("sensor.a_current", "Current"), ent("sensor.a_power", "Power")]
+        local = [ent("sensor.b_one", "Amperage"), ent("sensor.b_two", "Wattage")]
+
+        plan = plan_swap(cloud, local)
+
+        assert plan.pairs == []
+        assert sorted(plan.cloud_unmatched) == ["sensor.a_current", "sensor.a_power"]
+
+    def test_the_fallback_does_not_cross_domains(self):
+        plan = plan_swap([ent("switch.a", "Socket 1")], [ent("light.b")])
+        assert plan.pairs == []
+        assert plan.cloud_unmatched == ["switch.a"]
+
+    def test_a_named_pair_and_an_unnamed_pair_in_one_device(self):
+        # The real shape of a plug: the switch named differently, the power
+        # sensor named the same.
+        cloud = [ent("switch.plug_socket_1", "Socket 1"), ent("sensor.plug_power", "Power")]
+        local = [ent("switch.plug_local"), ent("sensor.plug_local_power", "Power")]
+
+        plan = plan_swap(cloud, local)
+
+        by_cloud = {p.cloud_entity_id: p.local_entity_id for p in plan.pairs}
+        assert by_cloud["switch.plug_socket_1"] == "switch.plug_local"
+        assert by_cloud["sensor.plug_power"] == "sensor.plug_local_power"
+        assert plan.cloud_unmatched == []
+
+    def test_a_cloud_entity_with_no_local_domain_at_all(self):
+        plan = plan_swap([ent("sensor.cloud_only", "Signal")], [ent("switch.x")])
+        assert plan.cloud_unmatched == ["sensor.cloud_only"]
