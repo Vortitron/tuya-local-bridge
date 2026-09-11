@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.15
+
+- **Moving entity ids across is now offered in the web UI**, right after a
+  conversion. Converting mints new entities, so automations, scripts and
+  dashboards still point at the old cloud ones and quietly stop working —
+  which made the conversion only half the job. The local entity takes the id
+  the cloud one had, so nothing referring to it needs editing at all.
+- It is previewed before anything moves, and says which entities have no local
+  counterpart and so stay on the cloud. Every move can still be rolled back.
+
 ## 0.1.14
 
 - Answers tuya-local's closing step after it was renamed from `name` to

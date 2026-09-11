@@ -28,6 +28,13 @@ from .convert import (
 )
 from .match import drop_shared_addresses, merge_lan, reconcile
 from .store import ProvenanceStore
+from .swap import (
+    DirectEntityRegistry,
+    VomeHomeEntityRegistry,
+    apply_swap,
+    entities_for_device,
+    plan_swap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +211,49 @@ def create_app(
         if ha_url and ha_token:
             return DirectFlowClient(ha_url, ha_token)
         raise RuntimeError("no Home Assistant credentials configured")
+
+    def entity_registry():
+        if use_broker():
+            return VomeHomeEntityRegistry(instance_id, vomehome_token, api_url)
+        return DirectEntityRegistry(ha_url, ha_token)
+
+    def device_map():
+        """Tuya device id -> {domain: Home Assistant device id}.
+
+        A converted device exists twice, once from the cloud integration and
+        once from tuya-local. That pairing is what makes the swap possible.
+        """
+        if use_broker():
+            raw = ha_discovery.device_registry_vomehome(
+                instance_id, vomehome_token, api_url
+            )
+        else:
+            raw = ha_discovery.device_registry_direct(ha_url or "", ha_token or "")
+        return ha_discovery.map_devices(raw)
+
+    def swap_plans(device_ids):
+        """(plans, problems) for the devices asked about."""
+        registry = entity_registry()
+        devices = device_map()
+        entities = registry.list_entities()
+
+        plans, problems = [], []
+        for tuya_id in device_ids:
+            mapping = devices.get(tuya_id) or {}
+            if "tuya" not in mapping or "tuya_local" not in mapping:
+                problems.append(
+                    (tuya_id, "needs both a cloud and a local device in Home Assistant")
+                )
+                continue
+            plan = plan_swap(
+                entities_for_device(entities, mapping["tuya"]),
+                entities_for_device(entities, mapping["tuya_local"]),
+            )
+            if plan.is_empty:
+                problems.append((tuya_id, "nothing pairs up to swap"))
+                continue
+            plans.append((tuya_id, plan))
+        return registry, plans, problems
 
     scan_cache: dict[str, Any] = {"at": 0.0, "devices": []}
 
@@ -470,14 +520,166 @@ def create_app(
             f"<td>{_esc(str(msg))}</td></tr>"
             for d, msg in failed
         )
+        offer = ""
+        if done:
+            # Converting mints new entities; everything that referred to the
+            # cloud ones is now pointing at a device nobody updates. Saying so
+            # here is the difference between a finished job and half of one.
+            offer = (
+                '<div class="note"><b>Your automations do not know about these '
+                "yet.</b> Converting created new entities, so automations, "
+                "scripts and dashboards still point at the old cloud ones and "
+                "will quietly stop working. Moving the ids across fixes that "
+                "without editing any of them.</div>"
+                '<form method="post" action="'
+                + _u("swap_confirm")
+                + '">'
+                + "".join(
+                    f'<input type="hidden" name="device" value="{_esc(m.id)}">'
+                    for m, _o in done
+                )
+                + "<button>Move the entity ids across</button></form>"
+            )
+
         return page(
             f'<div class="card wrap"><table><tr><th>device</th><th>result</th><th></th></tr>'
             f"{rows}</table></div>"
+            f"{offer}"
             f'<p><a href="{_u("index")}">Back to status</a></p>',
             f"{len(done)} converted, {len(failed)} failed",
         )
 
+    @app.post("/swap/confirm")
+    def swap_confirm():
+        """Show exactly which id moves where, before anything moves.
+
+        Converting mints new entities, so automations, scripts and dashboards
+        still point at the cloud ones and quietly stop working. The repair is
+        to give the local entity the id the cloud one had -- then nothing that
+        references it needs changing at all.
+
+        It is previewed rather than just done because it is not always wanted:
+        a device converted by hand may already have a better id than the cloud
+        ever gave it, and swapping would throw that away.
+        """
+        chosen = request.form.getlist("device")
+        if not chosen:
+            return redirect(_u("index"))
+
+        _registry, plans, problems = swap_plans(chosen)
+        return page(_render_swap_preview(plans, problems), "Check before swapping")
+
+    @app.post("/swap")
+    def swap_apply():
+        chosen = request.form.getlist("device")
+        if not chosen:
+            return redirect(_u("index"))
+
+        registry, plans, problems = swap_plans(chosen)
+        store = ProvenanceStore(store_path)
+
+        done, failed = [], list(problems)
+        for tuya_id, plan in plans:
+            try:
+                results = apply_swap(registry, plan, store, tuya_id)
+            except Exception as exc:
+                logger.exception("swap failed for %s", tuya_id)
+                failed.append((tuya_id, str(exc)))
+                continue
+            for result in results:
+                (done if result.ok else failed).append(
+                    (result.entity_id, result.detail)
+                    if result.ok
+                    else (result.entity_id, result.detail or "failed")
+                )
+        store.save()
+        return page(_render_swap_result(done, failed), "Entity ids moved")
+
     return app
+
+
+def _render_swap_preview(plans, problems) -> str:
+    """What the swap would do, device by device."""
+    parts: list[str] = []
+
+    if plans:
+        rows = "".join(
+            f"<tr><td><code>{_esc(pair.local_entity_id)}</code></td>"
+            f'<td class="muted">becomes</td>'
+            f"<td><code>{_esc(pair.cloud_entity_id)}</code></td></tr>"
+            for _tuya_id, plan in plans
+            for pair in plan.pairs
+        )
+        unmatched = [
+            entity_id
+            for _tuya_id, plan in plans
+            for entity_id in plan.cloud_unmatched
+        ]
+        parts.append(
+            "<p>The local entity takes the id the cloud one had, so anything "
+            "referring to it keeps working untouched. The cloud entity is "
+            "renamed with a <code>_cloud</code> suffix and disabled.</p>"
+            f'<div class="card wrap"><table>'
+            f"<tr><th>local entity</th><th></th><th>takes this id</th></tr>"
+            f"{rows}</table></div>"
+        )
+        if unmatched:
+            parts.append(
+                '<div class="note"><b>Left on the cloud.</b> These have no local '
+                "counterpart, so anything using them still goes through Tuya:<br>"
+                + "<br>".join(f"<code>{_esc(e)}</code>" for e in unmatched)
+                + "</div>"
+            )
+        parts.append(
+            '<form method="post" action="'
+            + _u("swap_apply")
+            + '" data-working="Moving entity ids —">'
+            + "".join(
+                f'<input type="hidden" name="device" value="{_esc(tuya_id)}">'
+                for tuya_id, _plan in plans
+            )
+            + "<button>Move the ids</button></form>"
+        )
+
+    if problems:
+        parts.append(
+            '<h2>Cannot swap</h2><div class="card wrap"><table>'
+            + "".join(
+                f"<tr><td><code>{_esc(str(d))}</code></td>"
+                f'<td class="muted">{_esc(str(why))}</td></tr>'
+                for d, why in problems
+            )
+            + "</table></div>"
+        )
+
+    if not parts:
+        parts.append('<div class="note">Nothing to swap.</div>')
+    parts.append(f'<p><a href="{_u("index")}">Back to status</a></p>')
+    return "".join(parts)
+
+
+def _render_swap_result(done, failed) -> str:
+    rows = "".join(
+        f"<tr><td><code>{_esc(str(e))}</code></td>"
+        f'<td class="ok">moved</td><td class="muted">{_esc(str(d))}</td></tr>'
+        for e, d in done
+    ) + "".join(
+        f"<tr><td><code>{_esc(str(e))}</code></td>"
+        f'<td class="err">failed</td><td class="muted">{_esc(str(d))}</td></tr>'
+        for e, d in failed
+    )
+    note = (
+        '<div class="note">Every move is recorded and can be undone with '
+        "<code>tuya-local-bridge rollback</code>.</div>"
+        if done
+        else ""
+    )
+    return (
+        f'<div class="card wrap"><table>'
+        f"<tr><th>entity</th><th>result</th><th></th></tr>{rows}</table></div>"
+        f"{note}"
+        f'<p><a href="{_u("index")}">Back to status</a></p>'
+    )
 
 
 # ── rendering helpers ──────────────────────────────────────────────────────
@@ -495,6 +697,8 @@ _PLAIN_PATHS = {
     "convert_confirm": "/convert/confirm",
     "convert_start": "/convert",
     "convert_finish": "/convert/finish",
+    "swap_confirm": "/swap/confirm",
+    "swap_apply": "/swap",
 }
 
 

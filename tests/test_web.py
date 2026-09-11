@@ -69,3 +69,83 @@ def test_qr_renders_as_inline_svg_not_a_remote_asset():
     assert "http://www.w3.org/2000/svg" in svg
     # Nothing may be fetched from outside — ingress CSP would block it.
     assert "src=" not in svg and "data:" not in svg
+
+
+# ── Moving entity ids across after a conversion ────────────────────────────
+
+from tuya_local_bridge.swap import EntityPair, SwapPlan  # noqa: E402
+from tuya_local_bridge.web import _render_swap_preview, _render_swap_result  # noqa: E402
+
+
+def _plan(*pairs, cloud_unmatched=()):
+    plan = SwapPlan()
+    plan.pairs = list(pairs)
+    plan.cloud_unmatched = list(cloud_unmatched)
+    return plan
+
+
+PAIR = EntityPair(
+    cloud_entity_id="light.front_porch",
+    local_entity_id="light.front_porch_local",
+    domain="light",
+    name=None,
+)
+
+
+def test_the_preview_says_which_id_moves_where():
+    html = _render_swap_preview([("abc", _plan(PAIR))], [])
+
+    assert "light.front_porch_local" in html
+    assert "light.front_porch" in html
+    # The reassurance that makes it safe to press: nothing else has to change.
+    assert "keeps working untouched" in html
+
+
+def test_the_preview_warns_about_entities_left_on_the_cloud():
+    # A plug's main switch often does not pair, and anything using it keeps
+    # going through Tuya. Silence there would be the worst outcome.
+    html = _render_swap_preview(
+        [("abc", _plan(PAIR, cloud_unmatched=["switch.plug_socket_1"]))], []
+    )
+
+    assert "switch.plug_socket_1" in html
+    assert "Left on the cloud" in html
+
+
+def test_the_preview_offers_nothing_to_press_when_there_is_nothing_to_do():
+    html = _render_swap_preview([], [("abc", "nothing pairs up to swap")])
+
+    assert "Cannot swap" in html
+    assert "nothing pairs up to swap" in html
+    assert "<button>" not in html
+
+
+def test_devices_carry_through_the_preview_to_the_apply_form():
+    html = _render_swap_preview([("bf1000aa2000bb3000ccd1", _plan(PAIR))], [])
+    assert 'name="device" value="bf1000aa2000bb3000ccd1"' in html
+
+
+def test_the_result_mentions_how_to_undo_it():
+    html = _render_swap_result([("light.front_porch", "was light.front_porch_local")], [])
+    assert "rollback" in html
+
+
+def test_a_failure_is_shown_rather_than_swallowed():
+    html = _render_swap_result([], [("light.front_porch", "boom")])
+    assert "failed" in html
+    assert "boom" in html
+    # Nothing moved, so do not advertise an undo that has nothing to undo.
+    assert "rollback" not in html
+
+
+def test_swap_preview_escapes_entity_ids():
+    pair = EntityPair(
+        cloud_entity_id='light.<script>alert("x")</script>',
+        local_entity_id="light.a",
+        domain="light",
+        name=None,
+    )
+    html = _render_swap_preview([("abc", _plan(pair))], [])
+
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
