@@ -1,6 +1,6 @@
 ---
 name: Tuya Local Bridge
-version: "0.1.16"
+version: "0.1.17"
 slug: tuya_local_bridge
 description: >-
   Find the local keys for your Tuya devices and move them to local control,
@@ -30,7 +30,9 @@ host_network: true
 
 options:
   scan_seconds: 18
+  heal_interval_hours: 6
   log_level: info
 schema:
   scan_seconds: int(0,120)
+  heal_interval_hours: float(0,168)
   log_level: list(debug|info|warning|error)

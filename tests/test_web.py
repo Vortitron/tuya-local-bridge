@@ -193,3 +193,45 @@ def test_a_mix_offers_only_the_ones_still_needing_it():
 def test_the_section_says_why_it_matters():
     html = _render_status(converted_result("abc"), {}, [])
     assert "still pointing at the" in html
+
+
+# ── Saying what is happening while the network is scanned ──────────────────
+
+def test_a_running_scan_says_so_with_a_counter():
+    # A still "Scanning..." with no number is exactly what a hung page looks
+    # like, which is the complaint this replaces.
+    html = _render_status(
+        reconcile([], []), {}, [], scan_enabled=True, scanning=True, scan_elapsed=12
+    )
+
+    assert "Scanning the network" in html
+    assert "12s" in html
+    assert "spinner" in html
+
+
+def test_a_running_scan_does_not_also_offer_a_rescan():
+    html = _render_status(reconcile([], []), {}, [], scan_enabled=True, scanning=True)
+    assert "Rescan the network" not in html
+
+
+def test_a_failed_scan_explains_what_still_works():
+    html = _render_status(
+        reconcile([], []), {}, [], scan_enabled=True, scan_error="the network could not be scanned"
+    )
+
+    assert "network scan failed" in html
+    assert "already converted may be" in html
+
+
+def test_a_finished_scan_offers_a_rescan_that_does_not_block():
+    html = _render_status(reconcile([], []), {}, [], scan_enabled=True)
+
+    assert "Rescan the network" in html
+    assert "runs in the background" in html
+
+
+def test_scan_errors_are_escaped():
+    html = _render_status(
+        reconcile([], []), {}, [], scan_enabled=True, scan_error='<script>alert("x")</script>'
+    )
+    assert "<script>" not in html

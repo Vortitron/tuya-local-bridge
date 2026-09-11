@@ -495,6 +495,7 @@ def cmd_serve(args) -> int:
         ha_url=args.ha_url or os.environ.get("HA_URL"),
         ha_token=os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN"),
         scan_seconds=args.scan_seconds,
+        heal_interval_hours=args.heal_interval_hours,
     )
     print(f"listening on http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port)
@@ -635,6 +636,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=int(os.environ.get("TUYA_LOCAL_BRIDGE_SCAN_SECONDS", "0")),
         help="also scan the LAN and merge (0 disables; needs host network)",
+    )
+    sp.add_argument(
+        "--heal-interval-hours",
+        type=float,
+        default=float(os.environ.get("TUYA_LOCAL_BRIDGE_HEAL_HOURS", "0")),
+        help="re-sync drifted entries this often (0 disables)",
     )
     sp.set_defaults(func=cmd_serve)
 

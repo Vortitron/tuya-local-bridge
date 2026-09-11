@@ -44,6 +44,7 @@ covers how to reach those.
 | option | meaning |
 | --- | --- |
 | `scan_seconds` | how long to listen for device broadcasts (0 disables scanning) |
+| `heal_interval_hours` | how often to re-sync entries whose address, key or protocol has moved (0 disables) |
 | `log_level` | add-on log verbosity |
 
 ## Notes

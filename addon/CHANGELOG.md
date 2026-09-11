@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.17
+
+- **Auto-heal**, on by default every 6 hours (`heal_interval_hours`, 0 to turn
+  off). A tuya-local entry pins an address, a local key and a protocol
+  version, none of which stay put; when one moves the device goes quiet with
+  nothing in the log naming the cause. This re-derives all three and re-syncs
+  the entry.
+- **The network scan no longer blocks the page.** It ran inline, so the first
+  load simply did not answer for most of a minute — indistinguishable from a
+  hung request. It now runs in the background, the page says it is scanning
+  and counts the seconds, and refreshes itself when there is more to show.
+  "Rescan" returns immediately for the same reason.
+- **The running version is shown at the bottom of every page**, so "did my
+  update actually land?" is answerable without leaving it.
+
 ## 0.1.16
 
 - **Already-converted devices can have their entity ids moved too.** The offer

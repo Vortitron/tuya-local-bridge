@@ -11,14 +11,15 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from typing import Any
 
 from flask import Flask, redirect, render_template_string, request, url_for
 
+from . import __version__, ha_discovery
 from . import cloud as cloud_mod
 from . import discovery as discovery_mod
-from . import ha_discovery
 from .convert import (
     TUYA_LOCAL_PORT,
     DirectFlowClient,
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{% if refresh_seconds %}<meta http-equiv="refresh" content="{{ refresh_seconds }}">{% endif %}
 <title>Tuya Local Bridge</title>
 <style>
   :root {
@@ -81,6 +83,9 @@ PAGE = """<!doctype html>
           border-radius:6px; padding:.7rem .9rem; margin-bottom:1rem; font-size:.9rem; }
   .qr { background:#fff; padding:1rem; border-radius:10px; display:inline-block; }
   form.inline { display:inline; }
+  .version { color:var(--muted); font-size:.78rem; margin-top:2rem;
+             border-top:1px solid var(--line); padding-top:.6rem; }
+  .scanning { display:flex; align-items:center; gap:.7rem; }
   .working { display:none; align-items:center; gap:.7rem; margin-top:1rem; }
   .working.on { display:flex; }
   .spinner { width:1.1rem; height:1.1rem; border:2px solid var(--line);
@@ -92,6 +97,7 @@ PAGE = """<!doctype html>
 <h1>Tuya Local Bridge</h1>
 <p class="sub">{{ subtitle }}</p>
 {{ body|safe }}
+<p class="version">Tuya Local Bridge {{ version }}</p>
 <script>
 /* Converting talks to Home Assistant and, when a device has moved, scans the
  * whole subnet looking for it. That can run past a minute with nothing on
@@ -154,6 +160,7 @@ def create_app(
     ha_token: str | None = None,
     scan_seconds: int = 0,
     scan_cache_seconds: int = 300,
+    heal_interval_hours: float = 0,
 ) -> Flask:
     """Build the app.
 
@@ -255,32 +262,62 @@ def create_app(
             plans.append((tuya_id, plan))
         return registry, plans, problems
 
-    scan_cache: dict[str, Any] = {"at": 0.0, "devices": []}
+    scan_lock = threading.Lock()
+    scan_cache: dict[str, Any] = {
+        "at": 0.0,
+        "devices": [],
+        "running": False,
+        "started": 0.0,
+        "error": None,
+    }
 
     def lan_scan(force: bool = False, deep: bool = False):
-        """Cached UDP scan; empty when scanning is disabled or unavailable.
+        """Whatever the last scan found, starting a new one if it is due.
 
-        ``deep`` additionally probes every address on the subnet.  A plain
-        scan only hears devices whose broadcasts reach us, and over a bridged
-        tunnel some do not — those keep whichever address Home Assistant
-        recorded when it first saw them, which may be weeks old.
+        A scan takes most of a minute, and doing it inline meant the first page
+        load simply did not answer until it finished — indistinguishable from a
+        hung request, with the browser's own spinner the only sign of life. So
+        it runs on a thread and the page renders straight away, saying that a
+        scan is in progress rather than pretending there is nothing to find.
         """
         if scan_seconds <= 0:
             return []
         fresh = (time.time() - scan_cache["at"]) < scan_cache_seconds
-        if fresh and not force and not deep:
-            return scan_cache["devices"]
-        try:
-            devices = discovery_mod.scan(scan_seconds, force_subnet_scan=deep)
-        except discovery_mod.DiscoveryUnavailable:
-            logger.warning("tinytuya not installed; skipping LAN scan")
-            return []
-        except OSError:
-            # No host network, or broadcast blocked. HA's discovery still works.
-            logger.warning("LAN scan failed; falling back to HA discovery", exc_info=True)
-            return scan_cache["devices"]
-        scan_cache.update(at=time.time(), devices=devices)
-        return devices
+        if force or deep or (not fresh and not scan_cache["running"]):
+            _start_scan(deep=deep)
+        return scan_cache["devices"]
+
+    def _start_scan(deep: bool = False) -> bool:
+        """Kick off a scan unless one is already running. True if it started."""
+        with scan_lock:
+            if scan_cache["running"]:
+                return False
+            scan_cache.update(running=True, started=time.time(), error=None)
+
+        def run() -> None:
+            try:
+                devices = discovery_mod.scan(scan_seconds, force_subnet_scan=deep)
+                with scan_lock:
+                    scan_cache.update(devices=devices, at=time.time())
+            except discovery_mod.DiscoveryUnavailable:
+                logger.warning("tinytuya not installed; skipping LAN scan")
+                with scan_lock:
+                    scan_cache["error"] = "tinytuya is not installed"
+            except OSError:
+                # No host network, or broadcast blocked. HA's discovery still works.
+                logger.warning("LAN scan failed; keeping the last result", exc_info=True)
+                with scan_lock:
+                    scan_cache["error"] = "the network could not be scanned"
+            except Exception as exc:
+                logger.exception("LAN scan failed")
+                with scan_lock:
+                    scan_cache["error"] = str(exc)
+            finally:
+                with scan_lock:
+                    scan_cache["running"] = False
+
+        threading.Thread(target=run, name="tuya-lan-scan", daemon=True).start()
+        return True
 
     def discovery(force_scan: bool = False, deep: bool = False):
         """(devices, flow_id_by_device_id, converted_ids).
@@ -313,8 +350,17 @@ def create_app(
         flows = {d.id: str(d.raw.get("flow_id") or "") for d in devices}
         return devices, flows, converted
 
-    def page(body: str, subtitle: str = "", code: int = 200):
-        return render_template_string(PAGE, body=body, subtitle=subtitle), code
+    def page(body: str, subtitle: str = "", code: int = 200, refresh_seconds: int = 0):
+        return (
+            render_template_string(
+                PAGE,
+                body=body,
+                subtitle=subtitle,
+                refresh_seconds=refresh_seconds,
+                version=__version__,
+            ),
+            code,
+        )
 
     # ── login ──────────────────────────────────────────────────────────────
 
@@ -387,6 +433,10 @@ def create_app(
         store.save()
 
         result = reconcile(cloud_devices, lan_devices, already_converted=converted)
+        with scan_lock:
+            scanning = bool(scan_cache["running"])
+            scan_error = scan_cache["error"]
+            scan_started = scan_cache["started"]
         return page(
             _render_status(
                 result,
@@ -398,8 +448,14 @@ def create_app(
                     for device_id, record in store.devices.items()
                     if record.active_migration is not None
                 ),
+                scanning=scanning,
+                scan_error=scan_error,
+                scan_elapsed=int(time.time() - scan_started) if scanning else 0,
             ),
             f"{session.username or 'connected'} — {len(cloud_devices)} devices on the account",
+            # While a scan runs the page is incomplete, so bring the answer to
+            # the reader rather than making them guess when to press reload.
+            refresh_seconds=6 if scanning else 0,
         )
 
     # ── conversion ─────────────────────────────────────────────────────────
@@ -605,6 +661,79 @@ def create_app(
         store.save()
         return page(_render_swap_result(done, failed), "Entity ids moved")
 
+    # ── Auto-heal ──────────────────────────────────────────────────────────
+
+    def _heal_once() -> None:
+        """Re-sync any converted entry whose address, key or protocol moved.
+
+        This has to run here rather than anywhere else: converting a device
+        consumes its Home Assistant discovery flow, so a converted device is
+        invisible to everything except a UDP scan on its own network. Run from
+        outside, drift detection reports "nothing has drifted" for exactly the
+        devices it exists to fix.
+        """
+        from .heal import (
+            DirectOptionsFlowClient,
+            HealError,
+            detect_drift,
+            entry_ids_for_devices,
+            repair,
+        )
+
+        if not (ha_url and ha_token):
+            logger.warning("auto-heal needs a direct Home Assistant connection")
+            return
+        if not os.path.exists(session_path):
+            logger.debug("auto-heal: not logged in yet")
+            return
+
+        session = cloud_mod.TuyaCloudSession.load(session_path)
+        cloud_devices = session.devices()
+        lan_devices, _flows, _converted = discovery()
+        store = ProvenanceStore(store_path)
+
+        registry = ha_discovery.device_registry_direct(ha_url, ha_token)
+        drifts = detect_drift(
+            cloud_devices, lan_devices, store, entry_ids_for_devices(registry)
+        )
+        if not drifts:
+            logger.debug("auto-heal: nothing has drifted")
+            return
+
+        client = DirectOptionsFlowClient(ha_url, ha_token)
+        for drift in drifts:
+            try:
+                repair(client, drift)
+                logger.info(
+                    "auto-heal repaired %s (%s)",
+                    drift.name or drift.device_id,
+                    drift.describe(),
+                )
+            except HealError as exc:
+                # A device that is simply switched off cannot be repaired, and
+                # saying so every interval would bury anything that matters.
+                logger.warning("auto-heal could not repair %s: %s", drift.device_id, exc)
+
+        store.record_cloud(cloud_devices)
+        store.record_lan(lan_devices)
+        store.save()
+
+    def _heal_loop() -> None:
+        interval = max(heal_interval_hours, 0.25) * 3600
+        # Let the first scan finish before the first pass, or it runs against
+        # an empty picture and concludes, wrongly, that nothing has moved.
+        time.sleep(min(interval, 180))
+        while True:
+            try:
+                _heal_once()
+            except Exception:
+                logger.exception("auto-heal pass failed")
+            time.sleep(interval)
+
+    if heal_interval_hours > 0:
+        threading.Thread(target=_heal_loop, name="tuya-auto-heal", daemon=True).start()
+        logger.info("auto-heal every %.2g h", heal_interval_hours)
+
     return app
 
 
@@ -739,6 +868,9 @@ def _render_status(
     *,
     scan_enabled: bool = False,
     swapped: frozenset[str] = frozenset(),
+    scanning: bool = False,
+    scan_error: str | None = None,
+    scan_elapsed: int = 0,
 ) -> str:
     parts: list[str] = []
 
@@ -752,9 +884,28 @@ def _render_status(
         "</div>"
     )
 
-    if scan_enabled:
+    if scanning:
+        # The counter matters: a still "Scanning..." with no number is what a
+        # hung page looks like, which is the complaint this replaces.
         parts.append(
-            '<p><a href="' + _u("index", rescan=1) + '">Rescan the network</a> <span class="muted">(takes a moment; results are cached)</span></p>'
+            '<div class="note"><div class="scanning">'
+            '<div class="spinner"></div>'
+            f"<div>Scanning the network for devices — {scan_elapsed}s. "
+            "The list below is what we know so far; it will fill in on its own."
+            "</div></div></div>"
+        )
+    elif scan_error:
+        parts.append(
+            f'<div class="note"><b>The network scan failed:</b> {_esc(scan_error)}.<br>'
+            "Home Assistant's own discovery is still being used, so devices it "
+            "has already seen are listed; devices already converted may be "
+            "missing.</div>"
+        )
+    elif scan_enabled:
+        parts.append(
+            f'<p><a href="{_u("index")}?rescan=1">Rescan the network</a> '
+            '<span class="muted">(runs in the background; the page updates '
+            "itself)</span></p>"
         )
 
     if rotated:
