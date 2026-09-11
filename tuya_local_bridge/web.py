@@ -659,7 +659,17 @@ def create_app(
 
         done, failed = [], list(problems)
         for tuya_id, plan in plans:
-            for cloud_id, why in add_manual_pairs(plan, choices).items():
+            # Only the choices this device was asked about. The form carries
+            # every device's answers together, and handing one device another
+            # device's choice makes it refuse a pairing that was never
+            # addressed to it -- which showed up as a spurious "failed: no
+            # longer needs a pairing" beside the move that had just worked.
+            mine = {
+                cloud_id: local_id
+                for cloud_id, local_id in choices.items()
+                if cloud_id in plan.cloud_unmatched
+            }
+            for cloud_id, why in add_manual_pairs(plan, mine).items():
                 failed.append((cloud_id, why))
             try:
                 results = apply_swap(registry, plan, store, tuya_id)

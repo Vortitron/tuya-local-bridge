@@ -286,3 +286,36 @@ def test_entities_with_no_candidate_at_all_are_not_offered_a_dropdown():
 
     assert "Left on the cloud" in html
     assert "pair__" not in html
+
+
+def test_one_devices_choice_is_not_offered_to_another(monkeypatch, tmp_path):
+    """The form carries every selected device's answers together.
+
+    Handing device B a choice made for device A made B refuse a pairing never
+    addressed to it, and report it as a failure beside A's successful move.
+    """
+    import tuya_local_bridge.web as web
+    from tuya_local_bridge.swap import plan_swap
+
+    plan_a = plan_swap(
+        [{"entity_id": "switch.a_socket", "original_name": "Socket 1"},
+         {"entity_id": "switch.a_lock", "original_name": "Child lock"}],
+        [{"entity_id": "switch.a_local", "original_name": None},
+         {"entity_id": "switch.a_over", "original_name": "Overcharge"}],
+    )
+    plan_b = plan_swap(
+        [{"entity_id": "switch.b_socket", "original_name": "Socket 1"},
+         {"entity_id": "switch.b_lock", "original_name": "Child lock"}],
+        [{"entity_id": "switch.b_local", "original_name": None},
+         {"entity_id": "switch.b_over", "original_name": "Overcharge"}],
+    )
+
+    choices = {"switch.a_socket": "switch.a_local"}
+    refusals = []
+    for plan in (plan_a, plan_b):
+        mine = {c: v for c, v in choices.items() if c in plan.cloud_unmatched}
+        refusals.extend(web.add_manual_pairs(plan, mine))
+
+    assert refusals == [], "a choice for another device must not be refused here"
+    assert len(plan_a.pairs) == 1
+    assert plan_b.pairs == []

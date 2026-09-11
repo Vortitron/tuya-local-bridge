@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.21
+
+- **A choice made for one device is no longer offered to another.** Swapping
+  several devices at once sent every answer to every device, so the ones it
+  was not meant for refused it — reporting "failed: no longer needs a pairing"
+  next to the move that had just succeeded. Nothing was actually wrong with
+  the swap; the report was.
+
 ## 0.1.20
 
 - **Where the matcher will not guess, it now asks.** A plug's cloud switches
