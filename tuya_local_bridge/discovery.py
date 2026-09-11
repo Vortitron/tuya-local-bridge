@@ -40,7 +40,7 @@ def scan(
     VLANs or AP isolation) at the cost of being much slower and noisier.
     """
     try:
-        import tinytuya
+        import tinytuya  # noqa: F401 - probing availability
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise DiscoveryUnavailable(
             "tinytuya is required for LAN discovery: pip install tinytuya"

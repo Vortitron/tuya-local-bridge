@@ -1,0 +1,48 @@
+name: Conversion report
+description: Did converting a device work, or not? Either answer is useful.
+title: "[conversion] "
+labels: ["conversion-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Automatic conversion is the one part not yet confirmed on a live
+        install. A report either way moves that forward — a failure is as
+        useful as a success, and more so if you can paste what it said.
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: What happened
+      options:
+        - The device converted and works
+        - It converted but the device does not respond
+        - It stopped part way through
+        - It failed immediately
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Add-on or package version
+      placeholder: "0.1.12"
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: What it is, and the protocol version if you know it.
+      placeholder: "Smart plug, protocol 3.5"
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: What it said
+      description: >-
+        Any message from the bridge, and the add-on log if you have it.
+        Please remove local keys — they are device credentials. Device ids
+        are fine truncated (bf1ca00f…).
+      render: text

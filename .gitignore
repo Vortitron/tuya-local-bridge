@@ -11,4 +11,8 @@ dist/
 .venv/
 venv/
 .pytest_cache/
+.ruff_cache/
 .coverage
+
+# Local assistant session state, not project content.
+.claude/

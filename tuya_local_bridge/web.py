@@ -189,8 +189,17 @@ def create_app(
     session_path = os.path.join(state_dir, "session.json")
     store_path = os.path.join(state_dir, "provenance.json")
 
+    def use_broker() -> bool:
+        """Whether to go via the VomeHome broker rather than straight to HA.
+
+        A direct connection wins whenever one is configured — that is what a
+        plain install and the add-on both have. The broker is for reaching an
+        instance this process cannot route to itself.
+        """
+        return not (ha_url and ha_token) and bool(instance_id and vomehome_token)
+
     def flow_client():
-        if instance_id and vomehome_token:
+        if use_broker():
             return VomeHomeFlowClient(instance_id, vomehome_token, api_url)
         if ha_url and ha_token:
             return DirectFlowClient(ha_url, ha_token)
@@ -230,7 +239,7 @@ def create_app(
         the scan then refines each record with the protocol version, which HA's
         flow does not carry.
         """
-        if instance_id and vomehome_token:
+        if use_broker():
             from_ha = ha_discovery.from_vomehome(instance_id, vomehome_token, api_url)
             converted = ha_discovery.converted_from_vomehome(
                 instance_id, vomehome_token, api_url
@@ -349,7 +358,7 @@ def create_app(
             return redirect(url_for("index"))
 
         session = cloud_mod.TuyaCloudSession.load(session_path)
-        lan_devices, flows, converted = discovery()
+        lan_devices, _flows, converted = discovery()
         result = reconcile(session.devices(), lan_devices, already_converted=converted)
         picked = [m for m in result.matched if m.id in chosen]
 

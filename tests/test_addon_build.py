@@ -61,7 +61,7 @@ def test_the_package_is_pinned_not_tracking_a_branch():
     none of the fix in it.
     """
     dockerfile = (ADDON / 'Dockerfile').read_text()
-    ref = [l for l in dockerfile.splitlines() if l.startswith('ARG BRIDGE_REF')]
+    ref = [line for line in dockerfile.splitlines() if line.startswith('ARG BRIDGE_REF')]
     assert ref, 'BRIDGE_REF is not declared'
     value = ref[0].split('=', 1)[1].strip() if '=' in ref[0] else ''
     assert value not in ('main', 'master', ''), (
@@ -73,9 +73,8 @@ def test_the_package_is_pinned_not_tracking_a_branch():
 def test_a_version_bump_alone_invalidates_the_layer():
     """Belt and braces if BRIDGE_REF is ever forgotten on a release."""
     dockerfile = (ADDON / 'Dockerfile').read_text()
-    install = [l for l in dockerfile.splitlines() if 'pip3 install' in l]
+    install = [line for line in dockerfile.splitlines() if 'pip3 install' in line]
     assert install, 'no install step found'
-    block = dockerfile.split('RUN')[-2] if 'RUN' in dockerfile else dockerfile
     assert 'BUILD_VERSION' in dockerfile
 
 
@@ -116,4 +115,33 @@ def test_the_pinned_commit_carries_this_version():
     assert yaml.safe_load(pinned.stdout)['version'] == _load('config.yaml')['version'], (
         f'BRIDGE_REF {ref} predates the current version bump, so the build '
         'would ship the previous release under the new version number'
+    )
+
+
+def test_the_three_version_numbers_agree():
+    """config.yaml, pyproject.toml and __version__ are set in three places.
+
+    Supervisor shows the first, `pip show` reports the second, and anyone
+    filing a bug quotes whichever they found. They drifted once already —
+    the add-on reached 0.1.11 while the package still called itself 0.1.0 —
+    which makes a report impossible to match against a commit.
+    """
+    import tuya_local_bridge
+
+    addon_version = _load('config.yaml')['version']
+
+    pyproject = (ADDON.parent / 'pyproject.toml').read_text()
+    declared = [
+        line.split('=', 1)[1].strip().strip('"')
+        for line in pyproject.splitlines()
+        if line.startswith('version =')
+    ]
+    assert declared, 'pyproject.toml declares no version'
+
+    assert declared[0] == addon_version, (
+        f'pyproject.toml says {declared[0]}, add-on says {addon_version}'
+    )
+    assert tuya_local_bridge.__version__ == addon_version, (
+        f'__version__ says {tuya_local_bridge.__version__}, '
+        f'add-on says {addon_version}'
     )

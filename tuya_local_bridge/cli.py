@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import sys
+from typing import NamedTuple
 
 from . import cloud as cloud_mod
 from . import discovery as discovery_mod
@@ -42,37 +43,76 @@ def _lan_devices(args):
         return []
 
     source = getattr(args, "source", "lan")
-    if source == "ha":
-        instance = args.instance or os.environ.get("VOMEHOME_INSTANCE_ID")
-        token = args.token or os.environ.get("VOMEHOME_TOKEN")
-        if not instance or not token:
-            sys.exit(
-                "--source ha needs --instance/--token "
-                "(or VOMEHOME_INSTANCE_ID / VOMEHOME_TOKEN)"
-            )
-        return ha_discovery.from_vomehome(instance, token, args.api_url)
-    if source == "ha-direct":
-        url = args.ha_url or os.environ.get("HA_URL")
-        token = args.token or os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
-        if not url or not token:
-            sys.exit("--source ha-direct needs --ha-url/--token (or HA_URL / HA_TOKEN)")
-        return ha_discovery.from_home_assistant(url, token)
-    return discovery_mod.scan(args.seconds, force_subnet_scan=args.force)
+    if source == "lan":
+        return discovery_mod.scan(args.seconds, force_subnet_scan=args.force)
+
+    target = _ha_target(args)
+    if target.kind == "direct":
+        return ha_discovery.from_home_assistant(target.url, target.token)
+    return ha_discovery.from_vomehome(target.instance, target.token, target.api_url)
+
+
+class _HaTarget(NamedTuple):
+    """Where to reach Home Assistant, and by which road."""
+
+    kind: str  # "direct" | "vomehome"
+    url: str = ""
+    token: str = ""
+    instance: str = ""
+    api_url: str = ""
+
+
+def _ha_target(args) -> _HaTarget:
+    """Work out how to reach Home Assistant, preferring a direct connection.
+
+    ``--source ha`` says *ask Home Assistant* without saying which road to
+    take.  A direct URL wins because that is what a plain install has; the
+    VomeHome broker is only used when it is the only thing configured, or when
+    asked for by name.  Every command resolves this the same way, so the
+    backends cannot drift apart — which they had, leaving direct users without
+    the "already converted" bucket.
+    """
+    source = getattr(args, "source", "ha")
+    url = getattr(args, "ha_url", None) or os.environ.get("HA_URL")
+    ha_token = (
+        getattr(args, "token", None)
+        or os.environ.get("HA_TOKEN")
+        or os.environ.get("SUPERVISOR_TOKEN")
+    )
+    instance = getattr(args, "instance", None) or os.environ.get("VOMEHOME_INSTANCE_ID")
+    broker_token = getattr(args, "token", None) or os.environ.get("VOMEHOME_TOKEN")
+    api_url = getattr(args, "api_url", None) or "https://vome.io"
+
+    if source != "vomehome" and url and ha_token:
+        return _HaTarget("direct", url=url, token=ha_token)
+    if source != "ha-direct" and instance and broker_token:
+        return _HaTarget(
+            "vomehome", instance=instance, token=broker_token, api_url=api_url
+        )
+
+    sys.exit(
+        "cannot reach Home Assistant: pass --ha-url with a token "
+        "(or set HA_URL and HA_TOKEN). Inside the add-on both are set for you."
+    )
 
 
 def _converted_ids(args) -> set[str]:
-    """Device ids tuya-local already owns, when the source can tell us.
+    """Device ids tuya-local already owns.
 
-    Only the brokered path exposes the device registry today; a LAN scan cannot
-    know, so it returns nothing and those devices simply stay in cloud-only.
+    A LAN scan cannot know this — nothing on the wire says a device has been
+    adopted — so those devices simply stay in cloud-only.
     """
-    if getattr(args, "source", "lan") != "ha":
+    if getattr(args, "source", "lan") == "lan":
         return set()
-    instance = args.instance or os.environ.get("VOMEHOME_INSTANCE_ID")
-    token = args.token or os.environ.get("VOMEHOME_TOKEN")
-    if not instance or not token:
+    try:
+        target = _ha_target(args)
+    except SystemExit:
         return set()
-    return ha_discovery.converted_from_vomehome(instance, token, args.api_url)
+    if target.kind == "direct":
+        return ha_discovery.converted_from_home_assistant(target.url, target.token)
+    return ha_discovery.converted_from_vomehome(
+        target.instance, target.token, target.api_url
+    )
 
 
 def _paths(args) -> tuple[str, str]:
@@ -280,22 +320,18 @@ def _registry_and_devices(args):
     from . import ha_discovery as hd
     from .swap import DirectEntityRegistry, VomeHomeEntityRegistry
 
-    instance = args.instance or os.environ.get("VOMEHOME_INSTANCE_ID")
-    token = args.token or os.environ.get("VOMEHOME_TOKEN")
-    if instance and token:
+    target = _ha_target(args)
+    if target.kind == "direct":
         return (
-            VomeHomeEntityRegistry(instance, token, args.api_url),
-            hd.map_devices(hd.device_registry_vomehome(instance, token, args.api_url)),
+            DirectEntityRegistry(target.url, target.token),
+            hd.map_devices(hd.device_registry_direct(target.url, target.token)),
         )
-
-    url = args.ha_url or os.environ.get("HA_URL")
-    ha_token = os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
-    if url and ha_token:
-        return (
-            DirectEntityRegistry(url, ha_token),
-            hd.map_devices(hd.device_registry_direct(url, ha_token)),
-        )
-    sys.exit("need --instance/--token, or --ha-url with HA_TOKEN")
+    return (
+        VomeHomeEntityRegistry(target.instance, target.token, target.api_url),
+        hd.map_devices(
+            hd.device_registry_vomehome(target.instance, target.token, target.api_url)
+        ),
+    )
 
 
 def cmd_swap(args) -> int:
@@ -405,17 +441,13 @@ def cmd_heal(args) -> int:
         cloud_devices = cloud_devices + _stored_devices(args, {d.id for d in cloud_devices})
     lan_devices = _lan_devices(args)
 
-    instance = args.instance or os.environ.get("VOMEHOME_INSTANCE_ID")
-    token = args.token or os.environ.get("VOMEHOME_TOKEN")
-    ha_url = args.ha_url or os.environ.get("HA_URL")
-    ha_token = os.environ.get("HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
-
-    if instance and token:
-        registry = hd.device_registry_vomehome(instance, token, args.api_url)
-    elif ha_url and ha_token:
-        registry = hd.device_registry_direct(ha_url, ha_token)
+    target = _ha_target(args)
+    if target.kind == "direct":
+        registry = hd.device_registry_direct(target.url, target.token)
     else:
-        sys.exit("need --instance/--token, or --ha-url with HA_TOKEN")
+        registry = hd.device_registry_vomehome(
+            target.instance, target.token, target.api_url
+        )
 
     drifts = detect_drift(
         cloud_devices, lan_devices, store, entry_ids_for_devices(registry)
@@ -431,15 +463,15 @@ def cmd_heal(args) -> int:
     if args.dry_run:
         print("\n(dry run — drop --dry-run to repair)")
         return 0
-    if not (ha_url and ha_token):
+    if target.kind != "direct":
         print(
             "\nRepair needs Home Assistant's options-flow API, which the VomeHome "
-            "broker does not route yet. Re-run with --ha-url and HA_TOKEN, or from "
-            "the add-on."
+            "broker does not route. Re-run with --ha-url and a token, or from the "
+            "add-on, where both are already set."
         )
         return 1
 
-    client = DirectOptionsFlowClient(ha_url, ha_token)
+    client = DirectOptionsFlowClient(target.url, target.token)
     print()
     for drift in drifts:
         try:
@@ -509,18 +541,21 @@ def build_parser() -> argparse.ArgumentParser:
     def add_scan_opts(sp):
         sp.add_argument(
             "--source",
-            choices=("lan", "ha", "ha-direct"),
+            choices=("lan", "ha", "ha-direct", "vomehome"),
             default=os.environ.get("TUYA_LOCAL_BRIDGE_SOURCE", "lan"),
             help=(
-                "where LAN facts come from: 'lan' scans locally; 'ha' reads Home "
-                "Assistant's discovery via the VomeHome broker (works remotely); "
-                "'ha-direct' reads it straight from Home Assistant"
+                "where LAN facts come from: 'lan' scans the network here; 'ha' "
+                "reads Home Assistant's own tuya-local discovery, which works "
+                "from anywhere. 'ha-direct' and 'vomehome' force one road to "
+                "Home Assistant when both are configured"
             ),
         )
-        sp.add_argument("--instance", help="VomeHome instance id (--source ha)")
-        sp.add_argument("--token", help="VomeHome or Home Assistant token")
-        sp.add_argument("--api-url", default="https://vome.io", help="VomeHome API base")
-        sp.add_argument("--ha-url", help="Home Assistant base URL (--source ha-direct)")
+        sp.add_argument("--ha-url", help="Home Assistant base URL, e.g. http://homeassistant:8123")
+        sp.add_argument("--token", help="Home Assistant long-lived token (or VomeHome token)")
+        sp.add_argument("--instance", help="VomeHome instance id (optional, VomeHome users only)")
+        sp.add_argument(
+            "--api-url", default="https://vome.io", help=argparse.SUPPRESS
+        )
         sp.add_argument("--seconds", type=int, default=discovery_mod.DEFAULT_SCAN_SECONDS)
         sp.add_argument("--force", action="store_true", help="also probe every subnet address")
 
@@ -561,10 +596,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_status)
 
     def add_ha_opts(sp):
-        sp.add_argument("--instance", help="VomeHome instance id")
-        sp.add_argument("--token", help="VomeHome token")
-        sp.add_argument("--api-url", default="https://vome.io")
-        sp.add_argument("--ha-url", help="Home Assistant base URL (direct mode)")
+        sp.add_argument("--ha-url", help="Home Assistant base URL, e.g. http://homeassistant:8123")
+        sp.add_argument("--token", help="Home Assistant long-lived token (or VomeHome token)")
+        sp.add_argument("--instance", help="VomeHome instance id (optional, VomeHome users only)")
+        sp.add_argument("--api-url", default="https://vome.io", help=argparse.SUPPRESS)
 
     sp = sub.add_parser(
         "heal", help="re-sync entries whose address, key or protocol has moved"

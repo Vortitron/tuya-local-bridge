@@ -1,10 +1,10 @@
 ---
 name: Tuya Local Bridge
-version: "0.1.11"
+version: "0.1.12"
 slug: tuya_local_bridge
 description: >-
-  Find the local keys for your Tuya devices and convert them to local control,
-  without a Tuya developer account.
+  Find the local keys for your Tuya devices and move them to local control,
+  without a Tuya developer account or an IoT Core subscription.
 url: https://github.com/Vortitron/tuya-local-bridge
 arch:
   - aarch64

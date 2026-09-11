@@ -20,7 +20,6 @@ flask = pytest.importorskip("flask")
 from tuya_local_bridge import web  # noqa: E402
 from tuya_local_bridge.models import CloudDevice, LanDevice  # noqa: E402
 
-
 STALE, CURRENT = "192.168.1.110", "192.168.1.78"
 
 
@@ -109,7 +108,7 @@ def test_a_reachable_device_does_not_pay_for_a_deep_scan(tmp_path, monkeypatch, 
 
 def test_a_device_that_is_really_gone_says_so_usefully(tmp_path, monkeypatch, rig):
     """When even a deep scan cannot find it, say what was tried."""
-    client, state = rig
+    client, _state = rig
     monkeypatch.setattr(web, "reachable", lambda ip, **k: False)
 
     body = client.post("/convert", data={"device": "hw"}).get_data(as_text=True)
@@ -157,7 +156,7 @@ def test_a_slow_conversion_shows_that_it_is_working(rig):
 
 def test_the_page_still_works_without_javascript(rig):
     """The indicator is decoration; the form must submit regardless."""
-    client, state = rig
+    client, _state = rig
     body = client.post("/convert/confirm", data={"device": "hw"}).get_data(
         as_text=True
     )

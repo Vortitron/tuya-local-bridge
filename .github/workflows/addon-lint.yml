@@ -1,0 +1,25 @@
+name: Add-on lint
+
+on:
+  push:
+    branches: [main]
+    paths: ["addon/**", "repository.yaml"]
+  pull_request:
+    paths: ["addon/**", "repository.yaml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Catches manifest mistakes that otherwise only surface as "an unknown
+      # error occurred while trying to build the image" on a user's machine.
+      - name: Home Assistant add-on lint
+        uses: frenck/action-addon-linter@v2
+        with:
+          path: "./addon"

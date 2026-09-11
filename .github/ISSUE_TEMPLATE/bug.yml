@@ -1,0 +1,43 @@
+name: Bug report
+description: Something else went wrong
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "0.1.12"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you are running it
+      options:
+        - Home Assistant add-on
+        - Command line
+        - Both
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >-
+        Please remove local keys before pasting — they are device
+        credentials.
+      render: text

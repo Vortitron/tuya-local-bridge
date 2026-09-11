@@ -1,262 +1,240 @@
-# tuya-local-bridge
+# Tuya Local Bridge
 
-> [!WARNING]
-> **Conversion has not yet been confirmed working end to end** (as of 0.1.11,
-> Aug 2026).
+[![Add repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FVortitron%2Ftuya-local-bridge)
+[![CI](https://github.com/Vortitron/tuya-local-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Vortitron/tuya-local-bridge/actions/workflows/ci.yml)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+
+**Finds the local keys for your Tuya devices, without a Tuya developer
+account**, and lines them up against what
+[tuya-local](https://github.com/make-all/tuya-local) can see on your network.
+
+tuya-local already discovers Tuya devices on your LAN. Tuya's cloud already
+knows every device's `local_key`. Nothing joined the two, so people copied IDs
+and keys by hand, one device at a time, out of a developer portal that expires.
+
+> [!IMPORTANT]
+> **What is proven, and what is not.**
 >
-> Discovery, cloud login and key matching work. tuya-local's config flow has
-> at least four steps (`user` → `local` → `select_type` → `name`) and flows
-> persist part-answered between attempts. The bridge now answers all four,
-> including the closing `name` step that previously stopped every conversion
-> with "tuya-local would not accept the device details. Its form is asking for
-> name" — but that last step is covered by tests against a recorded flow
-> shape, not yet by a device converted on a live install.
+> Finding your devices and their local keys **works** and is what most people
+> want — it is the tedious half. Verified against real accounts: 21 devices
+> from Smart Life, 7 more from a LEDVANCE account, every one with a usable key.
 >
-> If it stops short, use it to *find* your devices and their local keys and
-> add those to tuya-local by hand.
-
-
-Joins **Tuya cloud local keys** to **LAN-discovered devices**, so
-[tuya-local](https://github.com/make-all/tuya-local) can be configured without
-hand-copying device IDs and keys out of the Tuya developer portal.
-
-tuya-local already discovers devices on your network. The cloud already knows
-every device's `local_key`. Nothing joins the two — that is what this does.
+> **Automatic conversion is not yet confirmed on a live install.** tuya-local's
+> config flow has four steps and the bridge now answers all of them, but that
+> last step is covered by tests against a recorded flow, not by a device
+> actually converted end to end. If it stops short, copy the keys it found into
+> tuya-local by hand — that still saves you the developer portal entirely.
+>
+> Reports either way are genuinely useful. Please open an issue.
 
 ## Why not the Tuya developer portal
 
-The usual advice (create a cloud project, grab Access ID/Secret, call
-`/v2.0/cloud/thing/{id}`) depends on an **IoT Core subscription**. That trial
-lasts about a month and can only be renewed every six, after which every data
-endpoint returns:
+Every other guide tells you to create a Tuya IoT project and call the device
+API. That depends on an **IoT Core subscription**, and every data endpoint
+starts returning:
 
 ```
 28841002  IoT Core service subscription has expired.
 ```
 
-A fresh project does not reset it — the subscription is account-level. Anything
-built on that path breaks for most users within a month.
+The trial lasts about a month, renews only every six, and is **account-level** —
+a fresh project does not reset it. Anything built on that path breaks for most
+people within a month of them setting it up.
 
-This tool uses the **device-sharing flow** instead: read a User Code from the
-Smart Life app, scan a QR, done. No developer account, no cloud project, no
+This uses the **device-sharing flow** instead: read a User Code out of the Smart
+Life app, scan a QR code, done. No developer account, no cloud project, no
 subscription. It is the same mechanism Home Assistant's own Tuya integration
-uses, and it returns `local_key` for every non-sub device.
+uses, and it returns a local key for every non-sub device.
 
 ## Install
 
+### As a Home Assistant add-on (easiest)
+
+[![Add repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FVortitron%2Ftuya-local-bridge)
+
+Or by hand: **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add
+`https://github.com/Vortitron/tuya-local-bridge`, then install **Tuya Local
+Bridge** and open it from the sidebar.
+
+It runs on host networking so it can hear device broadcasts, and authenticates
+with the Supervisor token — there is nothing to configure beyond your Smart Life
+User Code.
+
+> This is an **add-on**, not a HACS integration, so it is added as an add-on
+> repository rather than through HACS. HACS does not install add-ons.
+> You will also want [tuya-local](https://github.com/make-all/tuya-local)
+> itself, which *is* a HACS integration.
+
+### As a command-line tool
+
 ```bash
-pip install -e ".[lan,qr]"
+pip install "tuya-local-bridge[lan,qr] @ git+https://github.com/Vortitron/tuya-local-bridge"
 ```
 
-`lan` pulls in tinytuya for discovery; `qr` renders the login code in the
-terminal. Both are optional but you want them.
+`lan` adds tinytuya for network scanning, `qr` renders the login code in your
+terminal. Add `web` for the browser UI.
 
 ## Use
 
 ```bash
-tuya-local-bridge login            # scan the QR with Smart Life
-tuya-local-bridge status           # cloud + LAN, reconciled
-tuya-local-bridge export           # config for the matched devices
+tuya-local-bridge login      # scan the QR with Smart Life
+tuya-local-bridge status     # what you have, and what can be converted
+tuya-local-bridge export     # ready-to-paste config for the matched devices
 ```
 
-`status` splits everything four ways:
+`status` sorts everything four ways, and the sorting is the useful part:
 
 | bucket | meaning |
 | --- | --- |
-| **matched** | in the cloud *and* discovered — ready for tuya-local |
-| **already converted** | tuya-local already owns it |
+| **matched** | in your account *and* visible on the network — ready to convert |
+| **already converted** | tuya-local already has it |
 | **cloud-only** | offline, on another subnet, or not local-capable |
-| **lan-only** | discovered but unexplained — usually re-paired, so any cached key is **stale** |
+| **lan-only** | on your network, but your account has never heard of it |
 
-That last bucket is the one that matters. A re-paired device gets a new local
-key and nothing tells you; the old tuya-local entry simply stops responding,
-often months later.
+An empty **lan-only** bucket is the goal: every device on the network accounted
+for. If yours is not empty, read on.
 
-**"Already converted" is not cosmetic.** Adding a device to tuya-local
-*consumes its discovery flow*, so a converted device stops being discoverable.
-Without that bucket it is indistinguishable from one that has gone offline —
-exactly backwards. It is resolved from HA's device registry, where tuya-local
-stores the Tuya device id verbatim.
+## Devices sold under another brand (LEDVANCE, SYLVANIA, …)
 
-## Install as a Home Assistant add-on
+A great many "not Tuya" devices *are* Tuya hardware, sold under someone else's
+brand and paired in that brand's own app — a Tuya white-label build with its own
+account. The Smart Life QR flow cannot see them at all, so they land in
+**lan-only**. LEDVANCE has since moved off the Tuya platform entirely, so
+re-pairing them to Smart Life does not work either. It was never your mistake.
 
-Add this repository in **Settings → Add-ons → Add-on store → ⋮ → Repositories**,
-install *Tuya Local Bridge*, and open it from the sidebar. It runs on host
-networking so it gets both discovery sources, and uses the Supervisor token —
-no configuration beyond your Smart Life User Code.
-
-See [`addon/`](addon/).
-
-## Where the LAN half comes from
-
-Two sources, chosen with `--source`:
-
-```bash
-# Read Home Assistant's own tuya-local discovery. Works remotely.
-tuya-local-bridge status --source ha --instance <id> --token <vomehome-token>
-
-# Or straight from Home Assistant
-tuya-local-bridge status --source ha-direct --ha-url http://homeassistant:8123 --token <ha-token>
-
-# Or scan the network yourself (must be on the broadcast domain)
-tuya-local-bridge status --source lan
-```
-
-`--source ha` is usually the better one. tuya-local is already resident on the
-right network and already raises a discovery flow per device, recording the
-Tuya device id as `unique_id` and the address in `title_placeholders` — the
-`device_id -> ip` half of the join, already collected. Reading it back means
-**no code has to run on the LAN at all**, it covers everything HA has heard
-since boot rather than one scan window, and it cannot disagree with what the
-user sees in the HA UI.
-
-Its limit is that it only sees flows that are still pending, which is precisely
-why the converted bucket exists.
-
-### Neither source is complete — use both
-
-They fail in opposite directions:
-
-| | Home Assistant discovery | UDP scan |
-| --- | --- | --- |
-| coverage | everything heard since boot | only what is broadcasting now |
-| converted devices | **invisible** (flow consumed) | visible |
-| sleepy battery devices | visible (heard earlier) | **often missed** |
-| protocol version | not carried | yes |
-| flow id for conversion | yes | no |
-
-Measured on one real network: **16 from HA, 15 from a scan, 18 between them.**
-`merge_lan()` unions them — pass HA first so its flow ids survive while the scan
-contributes protocol versions. The add-on does this automatically.
-
-## Devices from other brands (LEDVANCE, SYLVANIA, …)
-
-Many "not Tuya" devices are Tuya hardware sold under another brand. They pair
-only in that brand's app, which is a Tuya white-label build with its own app
-credentials — so the Smart Life QR flow cannot see them at all, and they land in
-the **lan-only** bucket. LEDVANCE in particular has moved off the Tuya platform,
-so re-pairing them to Smart Life does not work either.
-
-Those apps use Tuya's older *mobile app* API, which returns `localKey` for an
-email and password:
+Those apps use Tuya's older mobile API, which returns `localKey` for an email
+and password:
 
 ```bash
 tuya-local-bridge vendor ledvance --email you@example.com
-tuya-local-bridge status --include-stored --source ha --instance <id> --token <t>
+tuya-local-bridge status --include-stored
 ```
 
-The keys are folded into `provenance.json`, so the password is only used once
-and never stored.
+The password is used once and never stored; the keys land in the local
+provenance file. LEDVANCE and SYLVANIA are supported — open an issue with a
+brand and we will look at adding it.
 
-Two other routes for the same devices, no tooling required:
+If you would rather remove the vendor account from the picture for good,
+[tuya-cloudcutter](https://github.com/tuya-cloudcutter/tuya-cloudcutter) can
+detach BK7231/RTL devices from Tuya and flash open firmware. That is
+irreversible and needs a device profile, but it is the thorough answer.
 
-- Some builds of the vendor app expose the local key in device settings, but
-  do not count on it — recent LEDVANCE versions do not.
-- **[tuya-cloudcutter](https://github.com/tuya-cloudcutter/tuya-cloudcutter)**
-  can detach BK7231/RTL devices from Tuya entirely and flash open firmware. That
-  is irreversible and needs a device profile, but it removes the vendor account
-  from the picture for good.
+## How the join works
 
-## The cloud does not give you a usable address
-
-Every cloud device reports `ip` as your **WAN** address, not a LAN one. Feeding
-it to tuya-local is a common and confusing mistake, so `CloudDevice` names the
-field `wan_ip` deliberately.
-
-The join is therefore across two sources, neither sufficient alone:
+Two sources, and **neither is sufficient alone**:
 
 ```
-cloud:      device_id -> local_key        (WAN address only)
-discovery:  device_id -> 192.168.x.y      (no key)
+your Tuya account:  device id -> local key      (but only your WAN address)
+network discovery:  device id -> 192.168.x.y    (but no key)
 ```
 
-Devices are joined on Tuya device id, never on address — ids are stable across
-DHCP changes.
+The cloud reports `ip` as the **public** address your device last phoned home
+from, not something you can connect to. Feeding that to tuya-local is the
+classic mistake, so the field is called `wan_ip` in the code to stop anyone
+making it twice.
 
-## When a device stops responding
+Devices are joined on Tuya device id, never on address — ids survive a DHCP
+lease, addresses do not.
+
+### Two discovery sources, failing in opposite directions
+
+| | Home Assistant's discovery | network scan |
+| --- | --- | --- |
+| coverage | everything heard since boot | only what is broadcasting now |
+| already-converted devices | **invisible** (flow consumed) | visible |
+| sleepy battery devices | visible (heard earlier) | **often missed** |
+| protocol version | not carried | yes |
+
+Measured on one real network: **16 from Home Assistant, 15 from a scan, 18
+between them.** The add-on uses both and merges them.
+
+This is also why "already converted" is its own bucket rather than a detail:
+adding a device to tuya-local *consumes its discovery entry*, so a converted
+device stops being discoverable. Without that bucket it is indistinguishable
+from one that has gone offline — exactly backwards.
+
+## When a device stops responding, months later
 
 A tuya-local entry pins three things that are not constant:
 
-- the **address**, which DHCP can move — a reservation makes that unlikely, not
-  impossible;
+- the **address**, which DHCP can move — a reservation makes that unlikely,
+  not impossible;
 - the **local key**, which rotates whenever the device is re-paired;
-- the **protocol version**, which can change across firmware updates.
+- the **protocol version**, which can change with firmware.
 
-All three fail identically: the device stops responding, often months later,
-with nothing in the log naming the cause. The repair is the same in each case —
-re-submit what we can re-derive:
+All three fail identically: silence, with nothing in the log naming the cause.
+Because all three can be re-derived, the repair is the same in each case:
 
 ```bash
-tuya-local-bridge heal --dry-run     # what has moved
-tuya-local-bridge heal               # re-sync it
+tuya-local-bridge heal --dry-run   # what has moved
+tuya-local-bridge heal             # re-sync it
 ```
 
-Discovery supplies the current address and protocol version, the account
-supplies the current key, and the provenance store says what the entry was
-configured with — so the difference *is* the staleness. This is why every
-observation is timestamped rather than overwritten.
+Every observation is timestamped rather than overwritten, so the difference
+between what was recorded and what is there now *is* the breakage.
 
-Repair needs Home Assistant's options-flow API, which the VomeHome broker does
-not route yet, so it runs in direct mode (the add-on, or `--ha-url` with
-`HA_TOKEN`). Detection works everywhere.
+## Keeping your automations working
 
-## Local keys are cached state, not configuration
+Converting a device creates **new** entities, so every automation, script and
+dashboard still points at the old cloud ones. Nothing warns you; things just
+quietly stop happening.
 
-Every observation is timestamped in `provenance.json`. A changed key bumps
-`key_generation` and records `key_rotated_at` rather than overwriting silently,
-and `stale_keys()` surfaces migrated devices whose key has not been
-re-confirmed. Re-run `status` periodically; that is the re-sync.
-
-The store also records which cloud entity a local entity replaced, so a
-migration can be rolled back.
-
-## Running it
-
-Only `--source lan` needs to be **inside the broadcast domain**. `--source ha`
-works from anywhere, because Home Assistant did the listening.
-
-The login endpoint is `/v1.0/m/life/home-assistant/qrcode/tokens` and it takes
-Home Assistant's client id. It is a Tuya↔Home Assistant surface, so this is
-intended to run inside Home Assistant, as an add-on or custom component. Do not
-call it from unrelated hosted infrastructure.
-
-## State
-
-`~/.config/tuya-local-bridge/` (override with `TUYA_LOCAL_BRIDGE_DIR`):
-
-- `session.json` — refresh token. Long-lived and grants **full control of your
-  home**. Written `0600`. Revoke via Smart Life → Me → Account → Device Sharing.
-- `provenance.json` — keys and migration history. Also `0600`.
-
-## Status
-
-Verified end to end against live accounts and a live Home Assistant.
-
-The Smart Life account gave 21 devices; Home Assistant's discovery gave 16
-flows; a UDP scan cross-checked both. That reconciled to 11 matched, 3 already
-converted, 7 not discovered — and 5 the account could not explain.
-
-Those five turned out to be LEDVANCE bulbs. Adding the vendor-app provider
-resolved every one of them:
-
-```
-matched 16  |  already converted 3  |  cloud-only 9  |  lan-only 0
+```bash
+tuya-local-bridge swap --dry-run <device-id>
 ```
 
-An empty lan-only bucket is the goal: every device on the network accounted
-for, and every convertible one holding a usable key. 103 unit tests.
+This moves the entity id across, so `light.front_porch` keeps meaning what it
+always meant. Always dry-run first: if you converted a device by hand and gave
+it a better name than the cloud did, a swap would undo that. Nothing is swapped
+unless you name it or pass `--all`, and every swap can be rolled back.
 
-Not yet done:
+## Where your credentials live
 
-- **The add-on image has not been built.** The manifests are written and
-  validated but nothing has run `docker build` against a Home Assistant base
-  image, and the Dockerfile installs from git, so the repo must be pushed first.
-- **The entity swap.** Adding a tuya-local device creates *new* entities, so
-  automations referencing the cloud entity break. The fix is to preserve
-  `entity_id`: free it from the cloud entity, then rename the local one into
-  it. `Migration.local_entity_id_original` exists to make that reversible, but
-  nothing drives Home Assistant's entity registry yet.
+`~/.config/tuya-local-bridge/` (or `/data` in the add-on):
+
+- `session.json` — a Tuya refresh token. Long-lived, and it grants **full
+  control of your home**. Written `0600`. Revoke it from Smart Life →
+  *Me → Account and Security → Device Sharing*.
+- `provenance.json` — local keys and migration history. Also `0600`.
+
+Nothing is sent anywhere except Tuya's own API and your Home Assistant.
+
+The login endpoint is a Tuya↔Home Assistant surface and takes Home Assistant's
+client id, so this is meant to run inside Home Assistant, as an add-on. Please
+do not point it at unrelated hosted infrastructure.
+
+## Running against a remote Home Assistant
+
+By default the tool talks to Home Assistant directly:
+
+```bash
+tuya-local-bridge status --source ha --ha-url http://homeassistant:8123 --token <token>
+```
+
+It can also reach an instance through the [VomeHome](https://vome.io) relay,
+which is where this came from — but that is entirely optional and nothing here
+needs a Vome account, a Vome server, or an internet connection beyond Tuya's
+own API. If you have never heard of Vome, ignore it; everything above works
+without it.
+
+## Contributing
+
+Issues and pull requests welcome, particularly:
+
+- **a conversion that worked, or did not** — the open question above;
+- **another brand's app credentials**, to widen the vendor support;
+- **device types tuya-local guesses wrongly**.
+
+```bash
+pip install -e ".[dev]"
+pytest -q
+ruff check tuya_local_bridge tests
+```
 
 ## Licence
 
-MIT.
+MIT. Protocol details for the vendor-app path derive from
+[FlagX/ha-ledvance-tuya-resync-localkey](https://github.com/FlagX/ha-ledvance-tuya-resync-localkey)
+(MIT).
+
+Not affiliated with Tuya, LEDVANCE, SYLVANIA or Home Assistant.
