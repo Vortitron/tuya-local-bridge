@@ -489,3 +489,65 @@ def test_devices_whose_names_never_followed_are_offered_a_catch_up():
 def test_no_catch_up_offered_when_nothing_is_half_done():
     html = _render_status(reconcile([], []), {}, [], needing_rename=[])
     assert "Device names have not followed" not in html
+
+
+# ── Automations that target a device rather than an entity ─────────────────
+
+from tuya_local_bridge.web import _render_automations_preview  # noqa: E402
+
+FOUND = [
+    (
+        "bf2d4fc9",
+        "ice ice machine",
+        [("1744274343050", "Ice machine Midnight flipper", 3)],
+    )
+]
+
+
+def test_the_preview_names_the_automations_and_counts_references():
+    html = _render_automations_preview(FOUND)
+
+    assert "Ice machine Midnight flipper" in html
+    assert "3 references" in html
+    assert "ice ice machine" in html
+
+
+def test_the_preview_explains_why_a_rename_did_not_fix_it():
+    html = _render_automations_preview(FOUND)
+
+    assert "no rename can follow" in html
+    assert "doing nothing" in html
+
+
+def test_the_preview_promises_an_undo_before_asking_to_proceed():
+    html = _render_automations_preview(FOUND)
+
+    assert "saved whole before it is changed" in html
+    assert html.index("saved whole") < html.index("<button>")
+
+
+def test_nothing_to_do_says_so_and_why():
+    html = _render_automations_preview([])
+
+    assert "No automation refers to a converted device by device" in html
+    assert "<button>" not in html
+
+
+def test_the_status_page_offers_it_when_something_is_stale():
+    html = _render_status(reconcile([], []), {}, [], stale_automations=FOUND)
+
+    assert "still point at the cloud" in html
+    assert "Show me which" in html
+
+
+def test_the_status_page_stays_quiet_when_nothing_is_stale():
+    html = _render_status(reconcile([], []), {}, [], stale_automations=[])
+    assert "still point at the cloud" not in html
+
+
+def test_automation_aliases_are_escaped():
+    found = [("d", "dev", [("1", '<script>alert("x")</script>', 1)])]
+    html = _render_automations_preview(found)
+
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html

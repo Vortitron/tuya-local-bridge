@@ -38,6 +38,17 @@ device is re-paired its key changes and it simply goes quiet. After a month
 without confirmation the status page says so and offers to sign in again —
 one form, and any changed key is picked up and healed.
 
+## Automations that target a device
+
+Home Assistant's automation editor writes a device id for its device triggers
+and actions, and that id survives every rename. So automations built that way
+keep pointing at the cloud device after a conversion — they run, and do
+nothing. The status page finds them and repoints them at the local device,
+saving each one whole first.
+
+Automations that use entities need none of this: moving the entity id carries
+them.
+
 ## Undoing
 
 Every id move is recorded and can be undone from the same list it was

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.26
+
+- **Automations that target a device can be repointed.** Moving an entity id
+  carries every reference to it, because the id *is* the reference. A device
+  reference is an internal id that no rename can follow, so automations built
+  with the editor's device actions kept pointing at the cloud device the
+  conversion disabled — running on schedule and doing nothing. The status page
+  now finds them, shows which and how many references each has, and repoints
+  them. Every automation is saved whole beforehand.
+- **The converted device inherits the area and labels.** It arrived in "no
+  area" while the disabled original kept the room, which makes it unfindable
+  in exactly the places people look. Only copied where the local device has
+  nothing of its own, so a deliberate choice is never overwritten.
+
 ## 0.1.25
 
 - **The device name now follows the entity ids.** The local device takes the

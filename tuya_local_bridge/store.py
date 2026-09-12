@@ -61,6 +61,26 @@ class DeviceRename:
     local_name_before: str
     renamed_at: float
     rolled_back_at: float | None = None
+    # Where the device sat and what it was tagged with. Defaulted so records
+    # written before this existed still load.
+    local_area_before: str = ""
+    local_labels_before: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AutomationRewrite:
+    """One automation repointed from the cloud device to the local one.
+
+    The whole previous configuration is kept, not a diff. Automations are the
+    user's own work and a partial restore would be worse than none.
+    """
+
+    automation_id: str
+    alias: str
+    references: int
+    config_before: dict
+    rewritten_at: float
+    rolled_back_at: float | None = None
 
 
 @dataclass
@@ -87,6 +107,7 @@ class DeviceRecord:
     category: str = ""
     migrations: list[Migration] = field(default_factory=list)
     renames: list[DeviceRename] = field(default_factory=list)
+    automation_rewrites: list[AutomationRewrite] = field(default_factory=list)
 
     @property
     def active_rename(self) -> DeviceRename | None:
@@ -129,8 +150,14 @@ class ProvenanceStore:
         for did, raw in (data.get("devices") or {}).items():
             migrations = [Migration(**m) for m in raw.pop("migrations", [])]
             renames = [DeviceRename(**r) for r in raw.pop("renames", [])]
+            rewrites = [
+                AutomationRewrite(**a) for a in raw.pop("automation_rewrites", [])
+            ]
             self.devices[did] = DeviceRecord(
-                **raw, migrations=migrations, renames=renames
+                **raw,
+                migrations=migrations,
+                renames=renames,
+                automation_rewrites=rewrites,
             )
 
     def save(self) -> None:
@@ -259,6 +286,8 @@ class ProvenanceStore:
         cloud_name_before: str,
         local_name_before: str,
         now: float | None = None,
+        local_area_before: str = "",
+        local_labels_before: list[str] | None = None,
     ) -> DeviceRename:
         rec = self.devices.get(device_id)
         if rec is None:
@@ -269,9 +298,39 @@ class ProvenanceStore:
             cloud_name_before=cloud_name_before,
             local_name_before=local_name_before,
             renamed_at=_now(now),
+            local_area_before=local_area_before,
+            local_labels_before=list(local_labels_before or []),
         )
         rec.renames.append(rename)
         return rename
+
+    def record_automation_rewrite(
+        self,
+        device_id: str,
+        automation_id: str,
+        alias: str,
+        references: int,
+        config_before: dict,
+        now: float | None = None,
+    ) -> AutomationRewrite:
+        rec = self.devices.get(device_id)
+        if rec is None:
+            rec = self.devices[device_id] = DeviceRecord(device_id=device_id)
+        rewrite = AutomationRewrite(
+            automation_id=str(automation_id),
+            alias=alias,
+            references=references,
+            config_before=config_before,
+            rewritten_at=_now(now),
+        )
+        rec.automation_rewrites.append(rewrite)
+        return rewrite
+
+    def active_automation_rewrites(self, device_id: str) -> list[AutomationRewrite]:
+        rec = self.devices.get(device_id)
+        if rec is None:
+            return []
+        return [a for a in rec.automation_rewrites if a.rolled_back_at is None]
 
     def record_rollback(self, device_id: str, now: float | None = None) -> Migration | None:
         rec = self.devices.get(device_id)

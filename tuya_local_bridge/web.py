@@ -303,6 +303,65 @@ def create_app(
                 pending.append((tuya_id, record.name or tuya_id))
         return pending
 
+    def automation_store():
+        """Automation configs are REST-only, so this needs a direct connection."""
+        if not (ha_url and ha_token):
+            return None
+        from .automations import AutomationStore
+
+        return AutomationStore(ha_url, ha_token)
+
+    def automations_pointing_at_cloud(store):
+        """[(tuya_id, device name, [(automation_id, alias, count)])].
+
+        Only for devices whose ids have already moved: before that, pointing at
+        the cloud device is not a mistake, it is where the device still is.
+        """
+        from .automations import automation_ids, count_references
+
+        configs_api = automation_store()
+        if configs_api is None:
+            return []
+
+        devices = device_map()
+        registry = entity_registry()
+        ids = automation_ids(registry.list_entities())
+
+        wanted = []
+        for tuya_id, record in store.devices.items():
+            if record.active_migration is None:
+                continue
+            cloud_device = (devices.get(tuya_id) or {}).get("tuya")
+            local_device = (devices.get(tuya_id) or {}).get("tuya_local")
+            if cloud_device and local_device:
+                wanted.append((tuya_id, record.name or tuya_id, cloud_device, local_device))
+        if not wanted:
+            return []
+
+        # One pass over the automations, checked against every device, rather
+        # than re-reading ninety-odd configs per device.
+        configs = {}
+        for automation_id in ids:
+            try:
+                config = configs_api.get(automation_id)
+            except Exception:
+                logger.warning("could not read automation %s", automation_id, exc_info=True)
+                continue
+            if config:
+                configs[automation_id] = config
+
+        found = []
+        for tuya_id, name, cloud_device, _local in wanted:
+            hits = [
+                (automation_id, str(config.get("alias") or automation_id),
+                 count_references(config, cloud_device))
+                for automation_id, config in configs.items()
+            ]
+            hits = [h for h in hits if h[2] > 0]
+            if hits:
+                found.append((tuya_id, name, sorted(hits, key=lambda h: h[1].lower())))
+        return found
+
     def swap_plans(device_ids):
         """(plans, problems) for the devices asked about."""
         registry = entity_registry()
@@ -521,6 +580,7 @@ def create_app(
                 scan_elapsed=int(time.time() - scan_started) if scanning else 0,
                 unverifiable=store.unverifiable_keys(UNVERIFIED_KEY_SECONDS),
                 needing_rename=devices_needing_a_rename(store),
+                stale_automations=automations_pointing_at_cloud(store),
             ),
             f"{session.username or 'connected'} — {len(cloud_devices)} devices on the account",
             # While a scan runs the page is incomplete, so bring the answer to
@@ -1001,6 +1061,56 @@ def create_app(
         store.save()
         return page(_render_swap_result(done, failed), "Device names moved")
 
+    @app.post("/automations/confirm")
+    def automations_confirm():
+        store = ProvenanceStore(store_path)
+        return page(
+            _render_automations_preview(automations_pointing_at_cloud(store)),
+            "Check before repointing",
+        )
+
+    @app.post("/automations")
+    def automations_apply():
+        from .automations import rewrite_references
+
+        configs_api = automation_store()
+        if configs_api is None:
+            return page(
+                '<div class="note">Repointing automations needs a direct Home '
+                "Assistant connection.</div>",
+                "Cannot repoint",
+                400,
+            )
+
+        store = ProvenanceStore(store_path)
+        devices = device_map()
+        done, failed = [], []
+
+        for tuya_id, _name, hits in automations_pointing_at_cloud(store):
+            mapping = devices.get(tuya_id) or {}
+            cloud_device, local_device = mapping.get("tuya"), mapping.get("tuya_local")
+            if not cloud_device or not local_device:
+                continue
+            for automation_id, alias, count in hits:
+                try:
+                    before = configs_api.get(automation_id)
+                    if not before:
+                        continue
+                    configs_api.save(
+                        automation_id,
+                        rewrite_references(before, cloud_device, local_device),
+                    )
+                except Exception as exc:
+                    logger.exception("could not repoint %s", automation_id)
+                    failed.append((alias, str(exc)))
+                    continue
+                store.record_automation_rewrite(
+                    tuya_id, automation_id, alias, count, before
+                )
+                done.append((alias, f"{count} reference(s) repointed"))
+        store.save()
+        return page(_render_swap_result(done, failed), "Automations repointed")
+
     return app
 
 
@@ -1133,6 +1243,44 @@ def _render_swap_preview(plans, problems) -> str:
     return "".join(parts)
 
 
+def _render_automations_preview(found) -> str:
+    """Which automations still point at the disabled cloud device."""
+    if not found:
+        return (
+            '<div class="note">No automation refers to a converted device by '
+            "device. Anything using these devices does so by entity, which the "
+            "id move already carried across.</div>"
+            f'<p><a href="{_u("index")}">Back to status</a></p>'
+        )
+
+    parts = [
+        "<p>These target the <em>device</em> rather than an entity. A device "
+        "reference is an internal id that no rename can follow, so they are "
+        "still pointing at the cloud device the conversion disabled — running "
+        "as scheduled and doing nothing.</p>"
+    ]
+    for _tuya_id, name, hits in found:
+        rows = "".join(
+            f"<tr><td>{_esc(alias)}</td>"
+            f'<td class="muted">{count} reference{"s" if count != 1 else ""}</td></tr>'
+            for _automation_id, alias, count in hits
+        )
+        parts.append(
+            f"<h2>{_esc(name)}</h2>"
+            f'<div class="card wrap"><table>'
+            f"<tr><th>automation</th><th></th></tr>{rows}</table></div>"
+        )
+    parts.append(
+        '<div class="note">Each automation is saved whole before it is changed, '
+        "so this can be put back exactly as it was.</div>"
+        '<form method="post" action="' + _u("automations_apply") + '" '
+        'data-working="Repointing —"><button>Point them at the local device</button>'
+        "</form>"
+        f'<p><a href="{_u("index")}">Back to status</a></p>'
+    )
+    return "".join(parts)
+
+
 def _render_rollback_preview(undoable, problems) -> str:
     """What undoing an id move would restore."""
     parts: list[str] = []
@@ -1236,6 +1384,8 @@ _PLAIN_PATHS = {
     "convert_start": "/convert",
     "convert_finish": "/convert/finish",
     "swap_confirm": "/swap/confirm",
+    "automations_confirm": "/automations/confirm",
+    "automations_apply": "/automations",
     "rename_apply": "/rename",
     "rollback_confirm": "/rollback/confirm",
     "rollback_apply": "/rollback",
@@ -1277,6 +1427,7 @@ def _render_status(
     scan_elapsed: int = 0,
     unverifiable: dict | None = None,
     needing_rename: list | None = None,
+    stale_automations: list | None = None,
 ) -> str:
     parts: list[str] = []
 
@@ -1327,6 +1478,18 @@ def _render_status(
             f'<a href="{_u("vendor_form")}?vendor={_esc(source)}'
             + (f"&email={_esc(account)}" if account else "")
             + '">Sign in again to refresh them</a>.</div>'
+        )
+
+    if stale_automations:
+        total = sum(len(hits) for _id, _name, hits in stale_automations)
+        parts.append(
+            '<div class="note"><b>Some automations still point at the cloud '
+            f"device.</b> {total} automation{'s' if total != 1 else ''} target a "
+            "converted device by device rather than by entity, and a device "
+            "reference is an id no rename can follow — so they run and do "
+            "nothing.<br>"
+            '<form method="post" action="' + _u("automations_confirm") + '">'
+            "<button>Show me which</button></form></div>"
         )
 
     if needing_rename:

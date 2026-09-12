@@ -365,6 +365,27 @@ def device_display_name(device: dict[str, Any]) -> str:
     return str(device.get("name_by_user") or device.get("name") or "")
 
 
+def plan_adoption(cloud_device: dict, local_device: dict) -> dict[str, Any]:
+    """What the local device should inherit besides its name.
+
+    A device that has moved rooms is a device you cannot find. Area and labels
+    are how Home Assistant groups things for dashboards, voice and automations
+    by area, and the converted device arrives with none of it — so it ends up
+    in "no area" while the disabled original keeps the room.
+
+    Only what the cloud device actually has, and only where the local one has
+    nothing, so a deliberate choice already made is never overwritten.
+    """
+    changes: dict[str, Any] = {}
+    area = cloud_device.get("area_id")
+    if area and not local_device.get("area_id"):
+        changes["area_id"] = area
+    labels = [str(x) for x in (cloud_device.get("labels") or [])]
+    if labels and not (local_device.get("labels") or []):
+        changes["labels"] = labels
+    return changes
+
+
 def plan_rename(cloud_device: dict, local_device: dict) -> tuple[str, str] | None:
     """(name for the local device, name for the cloud device), or None.
 
@@ -399,9 +420,10 @@ def apply_rename(
     the state this exists to end.
     """
     planned = plan_rename(cloud_device, local_device)
-    if planned is None:
+    adoption = plan_adoption(cloud_device, local_device)
+    if planned is None and not adoption:
         return None
-    local_name, cloud_name = planned
+    local_name, cloud_name = planned or (None, None)
 
     # Record the *user override* rather than the displayed name. Restoring a
     # display name would pin an integration-supplied name as a user override,
@@ -409,16 +431,21 @@ def apply_rename(
     cloud_before = str(cloud_device.get("name_by_user") or "")
     local_before = str(local_device.get("name_by_user") or "")
 
-    registry.update_device(str(cloud_device["id"]), name_by_user=cloud_name)
+    if cloud_name is not None:
+        registry.update_device(str(cloud_device["id"]), name_by_user=cloud_name)
     try:
-        registry.update_device(str(local_device["id"]), name_by_user=local_name)
+        changes: dict[str, Any] = dict(adoption)
+        if local_name is not None:
+            changes["name_by_user"] = local_name
+        registry.update_device(str(local_device["id"]), **changes)
     except Exception:
         # Put the cloud name back rather than leave both devices renamed
         # halfway, which is harder to understand than not having started.
-        with suppress(Exception):
-            registry.update_device(
-                str(cloud_device["id"]), name_by_user=cloud_before or None
-            )
+        if cloud_name is not None:
+            with suppress(Exception):
+                registry.update_device(
+                    str(cloud_device["id"]), name_by_user=cloud_before or None
+                )
         raise
 
     store.record_rename(
@@ -427,8 +454,10 @@ def apply_rename(
         local_device_id=str(local_device["id"]),
         cloud_name_before=cloud_before,
         local_name_before=local_before,
+        local_area_before=str(local_device.get("area_id") or ""),
+        local_labels_before=[str(x) for x in (local_device.get("labels") or [])],
     )
-    return local_name
+    return local_name or device_display_name(local_device)
 
 
 def rollback_rename(registry, store: ProvenanceStore, tuya_id: str) -> str | None:
@@ -438,7 +467,12 @@ def rollback_rename(registry, store: ProvenanceStore, tuya_id: str) -> str | Non
     if rename is None:
         return None
 
-    registry.update_device(rename.local_device_id, name_by_user=rename.local_name_before or None)
+    registry.update_device(
+        rename.local_device_id,
+        name_by_user=rename.local_name_before or None,
+        area_id=rename.local_area_before or None,
+        labels=list(rename.local_labels_before),
+    )
     registry.update_device(rename.cloud_device_id, name_by_user=rename.cloud_name_before or None)
     rename.rolled_back_at = _now()
     return rename.cloud_name_before
