@@ -11,7 +11,7 @@ FROM ${BUILD_FROM}
 # also makes a given add-on version reproducible.
 #
 # Bump this with the add-on version when releasing.
-ARG BRIDGE_REF=3b3ed00
+ARG BRIDGE_REF=fedaa94
 
 # Supervisor passes BUILD_VERSION; naming it here means a version bump alone is
 # enough to invalidate the layer even if BRIDGE_REF is ever left alone.
