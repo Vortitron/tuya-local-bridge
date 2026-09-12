@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.23
+
+- **Devices from another brand can now actually be converted.** They appeared
+  on the status page and then vanished the moment you pressed a button —
+  "nothing selected" for a device plainly listed and ticked. Only the status
+  page folded in keys fetched from a vendor account; every page that acted
+  rebuilt the picture from the Smart Life session alone, where those devices
+  do not exist. One place now decides what devices there are.
+- Auto-heal covers them too. A vendor key cannot be re-fetched without the
+  password, but addresses and protocol versions drift like anything else.
+
 ## 0.1.22
 
 - **Other brands can be signed in to from the add-on.** LEDVANCE, SYLVANIA and

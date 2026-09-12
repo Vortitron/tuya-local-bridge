@@ -407,3 +407,36 @@ def test_devices_already_in_this_session_are_not_duplicated(tmp_path):
     store.record_cloud([CloudDevice(id="abc", name="x", local_key="k")], now=1.0)
 
     assert stored_devices(store, known={"abc"}) == []
+
+
+def test_every_page_agrees_about_which_devices_exist(tmp_path, monkeypatch):
+    """A device listed on one page must still exist on the next.
+
+    Vendor-account keys were folded in only on the status page, so a LEDVANCE
+    bulb could be listed as ready, selected, and then met with "nothing
+    selected" — because the page that acted rebuilt the picture from the Smart
+    Life session alone and the device was simply not in it.
+    """
+    import tuya_local_bridge.web as web
+    from tuya_local_bridge.models import CloudDevice
+    from tuya_local_bridge.store import ProvenanceStore
+
+    store = ProvenanceStore(str(tmp_path / "p.json"))
+    store.record_cloud(
+        [
+            CloudDevice(id="smartlife1", name="bedroom light", local_key="k1"),
+            CloudDevice(id="ledvance1", name="gold light 1", local_key="k2"),
+        ],
+        now=1.0,
+    )
+    store.save()
+
+    session_devices = [CloudDevice(id="smartlife1", name="bedroom light", local_key="k1")]
+    folded = session_devices + web.stored_devices(
+        store, {d.id for d in session_devices}
+    )
+
+    ids = {d.id for d in folded}
+    assert "ledvance1" in ids, "the vendor device must survive the rebuild"
+    assert "smartlife1" in ids
+    assert len(folded) == 2, "and must not be duplicated"

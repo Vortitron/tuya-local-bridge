@@ -221,6 +221,21 @@ def create_app(
             return DirectFlowClient(ha_url, ha_token)
         raise RuntimeError("no Home Assistant credentials configured")
 
+    def cloud_inventory() -> list:
+        """Every device we hold a key for.
+
+        The Smart Life session plus anything fetched from a vendor account --
+        LEDVANCE and the like are separate Tuya accounts this login cannot see.
+        Every page that acts on a device has to agree with the page that listed
+        it: when only the status page folded these in, selecting a LEDVANCE
+        bulb and pressing convert produced "nothing selected", because the
+        device was real on one page and absent on the next.
+        """
+        session = cloud_mod.TuyaCloudSession.load(session_path)
+        devices = session.devices()
+        store = ProvenanceStore(store_path)
+        return devices + stored_devices(store, {d.id for d in devices})
+
     def entity_registry():
         if use_broker():
             return VomeHomeEntityRegistry(instance_id, vomehome_token, api_url)
@@ -482,9 +497,8 @@ def create_app(
         if not chosen:
             return redirect(url_for("index"))
 
-        session = cloud_mod.TuyaCloudSession.load(session_path)
         lan_devices, _flows, converted = discovery()
-        result = reconcile(session.devices(), lan_devices, already_converted=converted)
+        result = reconcile(cloud_inventory(), lan_devices, already_converted=converted)
         picked = [m for m in result.matched if m.id in chosen]
 
         return page(_render_confirm(picked), "Before we start")
@@ -496,9 +510,8 @@ def create_app(
         if not chosen:
             return redirect(url_for("index"))
 
-        session = cloud_mod.TuyaCloudSession.load(session_path)
         lan_devices, flows, converted = discovery()
-        result = reconcile(session.devices(), lan_devices, already_converted=converted)
+        result = reconcile(cloud_inventory(), lan_devices, already_converted=converted)
 
         # Addresses go stale.  Home Assistant's discovery remembers every
         # device it has ever heard and never expires the address, and a plain
@@ -514,7 +527,7 @@ def create_app(
             logger.info("a selected device did not answer; running a deep scan")
             lan_devices, flows, converted = discovery(force_scan=True, deep=True)
             result = reconcile(
-                session.devices(), lan_devices, already_converted=converted
+                cloud_inventory(), lan_devices, already_converted=converted
             )
 
         client = flow_client()
@@ -560,9 +573,8 @@ def create_app(
     @app.post("/convert/finish")
     def convert_finish():
         """Phase two: submit the chosen types."""
-        session = cloud_mod.TuyaCloudSession.load(session_path)
         lan_devices, flows, converted = discovery()
-        result = reconcile(session.devices(), lan_devices, already_converted=converted)
+        result = reconcile(cloud_inventory(), lan_devices, already_converted=converted)
         client = flow_client()
         by_id = {m.id: m for m in result.matched}
 
@@ -715,8 +727,10 @@ def create_app(
             logger.debug("auto-heal: not logged in yet")
             return
 
-        session = cloud_mod.TuyaCloudSession.load(session_path)
-        cloud_devices = session.devices()
+        # Vendor-account devices included: their key cannot be re-fetched
+        # without the password, but their address and protocol drift like
+        # anything else, and those are the parts healing can put right.
+        cloud_devices = cloud_inventory()
         lan_devices, _flows, _converted = discovery()
         store = ProvenanceStore(store_path)
 
