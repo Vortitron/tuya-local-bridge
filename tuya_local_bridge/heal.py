@@ -44,6 +44,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 60
 
+# What tuya-local's options form asks for, used only when the form arrives
+# with no serialised schema to read. Notably no device_id: an entry that
+# already exists knows which device it is, and offering one is refused.
+OPTIONS_FIELDS = (CONF_LOCAL_KEY, CONF_HOST, CONF_PROTOCOL_VERSION)
+
 DRIFT_ADDRESS = "address"
 DRIFT_KEY = "local_key"
 DRIFT_VERSION = "protocol_version"
@@ -144,12 +149,53 @@ def detect_drift(
     return drifts
 
 
+def options_payload(step: dict[str, Any], drift: Drift) -> dict[str, Any]:
+    """Fill in whatever fields the options form actually declares.
+
+    The options form is *not* the config form. tuya-local's asks for a key, a
+    host, a protocol and a poll-only flag, and refuses a device id outright --
+    "not a valid option at 'device_id'" -- because the device is fixed for an
+    entry that already exists. Assuming the config flow's shape here cost a
+    release.
+
+    So read the form. Everything it asks for that we know, we supply; anything
+    else keeps the default it arrived with, and a protocol version it will not
+    accept becomes "auto" rather than a 400.
+    """
+    from .convert import _declared_fields, extract_options
+
+    fields = _declared_fields(step) or list(OPTIONS_FIELDS)
+    defaults = {
+        str(entry.get("name")): entry.get("default")
+        for entry in (step or {}).get("data_schema") or []
+        if isinstance(entry, dict) and entry.get("name")
+    }
+
+    known: dict[str, Any] = {
+        CONF_DEVICE_ID: drift.device_id,
+        CONF_HOST: drift.current_ip or drift.known_ip,
+        CONF_LOCAL_KEY: drift.current_key or drift.known_key,
+    }
+
+    payload: dict[str, Any] = {}
+    for name in fields:
+        if name == CONF_PROTOCOL_VERSION:
+            offered = extract_options(step, CONF_PROTOCOL_VERSION)
+            wanted = drift.current_version or str(defaults.get(name) or "auto")
+            payload[name] = wanted if (not offered or wanted in offered) else "auto"
+        elif known.get(name):
+            payload[name] = known[name]
+        elif name in defaults and defaults[name] is not None:
+            payload[name] = defaults[name]
+    return payload
+
+
 def repair(client: OptionsFlowClient, drift: Drift) -> str:
     """Re-submit the options flow with current values. Returns a status word.
 
-    Every field is supplied rather than only the changed one: we can re-derive
-    all of them, and submitting a partial form would leave the rest at whatever
-    the form happened to default to.
+    Every field the form asks for is supplied rather than only the changed one:
+    we can re-derive all of them, and a partial form would leave the rest at
+    whatever the form happened to default to.
     """
     if not drift.entry_id:
         raise HealError(f"{drift.device_id}: no config entry to repair")
@@ -159,12 +205,7 @@ def repair(client: OptionsFlowClient, drift: Drift) -> str:
     if not flow_id:
         raise HealError(f"{drift.device_id}: options flow did not start ({started!r})")
 
-    user_input = {
-        CONF_DEVICE_ID: drift.device_id,
-        CONF_HOST: drift.current_ip or drift.known_ip,
-        CONF_LOCAL_KEY: drift.current_key or drift.known_key,
-        CONF_PROTOCOL_VERSION: drift.current_version or "auto",
-    }
+    user_input = options_payload(started, drift)
     step = client.continue_options_flow(flow_id, user_input)
 
     step_type = (step or {}).get("type")

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.28
+
+- **Re-sync works.** It was sending the config flow's field set at the options
+  flow, which answered `not a valid option at 'device_id'` and changed
+  nothing: an entry that already exists knows which device it is. The repair
+  now reads the form it has been handed and fills in only what that form asks
+  for — and a protocol version the form will not accept falls back to "auto"
+  rather than failing the whole submission.
+
 ## 0.1.27
 
 - **The scan no longer loops.** "Rescan" left `?rescan=1` in the address bar

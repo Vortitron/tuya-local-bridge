@@ -104,9 +104,11 @@ class FakeFlow:
         self.steps = list(steps)
         self.calls = []
 
+    start_step = {"flow_id": "f1", "type": "form", "step_id": "init"}
+
     def start_options_flow(self, entry_id):
         self.calls.append(("start", entry_id))
-        return {"flow_id": "f1", "type": "form", "step_id": "init"}
+        return self.start_step
 
     def continue_options_flow(self, flow_id, user_input):
         self.calls.append(("continue", user_input))
@@ -125,15 +127,63 @@ def drift_fixture():
     )
 
 
-def test_repair_submits_every_field_not_just_the_changed_one():
+def test_repair_fills_in_what_the_form_asks_for():
+    """The options form is not the config form.
+
+    tuya-local's options step wants a key, a host and a protocol, and rejects
+    a device id outright — "not a valid option at 'device_id'" — because an
+    entry that already exists knows which device it is. Assuming the config
+    flow's shape here cost a release.
+    """
     flow = FakeFlow({"type": "create_entry"})
+    flow.start_step = {
+        "flow_id": "f1",
+        "type": "form",
+        "step_id": "user",
+        "data_schema": [
+            {"name": "local_key", "required": True, "type": "string"},
+            {"name": "host", "required": True, "type": "string"},
+            {"name": "protocol_version", "options": ["auto", "3.3", "3.4"]},
+            {"name": "poll_only", "default": False, "type": "boolean"},
+        ],
+    }
+
     assert repair(flow, drift_fixture()) == "repaired"
 
     _, submitted = flow.calls[1]
+    assert "device_id" not in submitted, "the options form refuses it"
     assert submitted["host"] == "192.168.1.99"
     assert submitted["local_key"] == "k1"
     assert submitted["protocol_version"] == "3.3"
-    assert submitted["device_id"] == "abc"
+    assert submitted["poll_only"] is False
+
+
+def test_a_protocol_the_form_will_not_take_becomes_auto():
+    # Better a working entry on auto than a 400 for an unlisted version.
+    flow = FakeFlow({"type": "create_entry"})
+    flow.start_step = {
+        "flow_id": "f1",
+        "type": "form",
+        "data_schema": [
+            {"name": "host", "type": "string"},
+            {"name": "protocol_version", "options": ["auto", "3.3"]},
+        ],
+    }
+    drift = drift_fixture()
+    drift.current_version = "3.5"
+
+    repair(flow, drift)
+
+    assert flow.calls[1][1]["protocol_version"] == "auto"
+
+
+def test_a_form_with_no_readable_schema_falls_back_to_what_it_wants():
+    flow = FakeFlow({"type": "create_entry"})
+    repair(flow, drift_fixture())
+
+    _, submitted = flow.calls[1]
+    assert set(submitted) == {"local_key", "host", "protocol_version"}
+    assert "device_id" not in submitted
 
 
 def test_repair_falls_back_to_known_values():
