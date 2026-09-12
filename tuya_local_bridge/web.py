@@ -28,7 +28,7 @@ from .convert import (
     reachable,
 )
 from .match import drop_shared_addresses, merge_lan, reconcile
-from .store import ProvenanceStore
+from .store import SMART_LIFE, ProvenanceStore
 from .swap import (
     DirectEntityRegistry,
     VomeHomeEntityRegistry,
@@ -40,6 +40,11 @@ from .swap import (
 )
 
 logger = logging.getLogger(__name__)
+
+# How long a key can go unconfirmed before the page offers to refresh it.
+# Long enough not to nag, short enough to notice before a re-pairing is
+# forgotten about.
+UNVERIFIED_KEY_SECONDS = 30 * 24 * 3600
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -449,7 +454,7 @@ def create_app(
         )
 
         store = ProvenanceStore(store_path)
-        rotated = store.record_cloud(cloud_devices)
+        rotated = store.record_cloud(cloud_devices, source=SMART_LIFE)
         cloud_devices = cloud_devices + stored_devices(
             store, {d.id for d in cloud_devices}
         )
@@ -475,6 +480,7 @@ def create_app(
                 scanning=scanning,
                 scan_error=scan_error,
                 scan_elapsed=int(time.time() - scan_started) if scanning else 0,
+                unverifiable=store.unverifiable_keys(UNVERIFIED_KEY_SECONDS),
             ),
             f"{session.username or 'connected'} — {len(cloud_devices)} devices on the account",
             # While a scan runs the page is incomplete, so bring the answer to
@@ -780,8 +786,12 @@ def create_app(
     def vendor_form():
         from .vendor import VENDORS
 
+        want = (request.args.get("vendor") or "").strip().lower()
+        email_prefill = (request.args.get("email") or "").strip()
         options = "".join(
-            f'<option value="{_esc(key)}">{_esc(v.label)}</option>'
+            '<option value="{}"{}>{}</option>'.format(
+                _esc(key), " selected" if key == want else "", _esc(v.label)
+            )
             for key, v in sorted(VENDORS.items())
         )
         return page(
@@ -795,6 +805,7 @@ def create_app(
             'data-working="Signing in —">'
             f"<p><label>Brand<br><select name=\"vendor\">{options}</select></label></p>"
             '<p><label>Account email<br><input name="email" type="email" required '
+            f'value="{_esc(email_prefill)}" '
             'style="padding:.5rem;border-radius:6px;border:1px solid var(--line)">'
             "</label></p>"
             '<p><label>Password<br><input name="password" type="password" required '
@@ -851,7 +862,7 @@ def create_app(
             )
 
         store = ProvenanceStore(store_path)
-        rotated = store.record_cloud(devices)
+        rotated = store.record_cloud(devices, source=brand, account=email)
         store.save()
 
         rows = "".join(
@@ -1191,6 +1202,7 @@ def _render_status(
     scanning: bool = False,
     scan_error: str | None = None,
     scan_elapsed: int = 0,
+    unverifiable: dict | None = None,
 ) -> str:
     parts: list[str] = []
 
@@ -1226,6 +1238,21 @@ def _render_status(
             f'<p><a href="{_u("index")}?rescan=1">Rescan the network</a> '
             '<span class="muted">(runs in the background; the page updates '
             "itself)</span></p>"
+        )
+
+    for (source, account), records in sorted((unverifiable or {}).items()):
+        # A vendor key is read once and never re-read, so we cannot tell a
+        # working one from a rotated one. Say so, and make asking cheap.
+        names = ", ".join(_esc(r.name or r.device_id) for r in records[:6])
+        more = f" and {len(records) - 6} more" if len(records) > 6 else ""
+        parts.append(
+            '<div class="note"><b>These keys cannot be checked from here.</b> '
+            f"{names}{more} came from a {_esc(source)} account, and nothing "
+            "re-reads it — so if one of those devices is re-paired its key "
+            "changes and the only symptom is the device going quiet.<br>"
+            f'<a href="{_u("vendor_form")}?vendor={_esc(source)}'
+            + (f"&email={_esc(account)}" if account else "")
+            + '">Sign in again to refresh them</a>.</div>'
         )
 
     if rotated:

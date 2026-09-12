@@ -31,6 +31,13 @@ some devices need one choice from you before the ids move.
 Zigbee and Bluetooth devices behind a hub have no individual local key and
 cannot be converted — only Wi-Fi devices and the hubs themselves.
 
+## Keys from another brand
+
+Those are read once, when you sign in, and nothing re-reads them. If such a
+device is re-paired its key changes and it simply goes quiet. After a month
+without confirmation the status page says so and offers to sign in again —
+one form, and any changed key is picked up and healed.
+
 ## Undoing
 
 Every id move is recorded and can be undone from the same list it was

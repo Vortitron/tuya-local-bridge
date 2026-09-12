@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.24
+
+- **Says when a key can no longer be vouched for.** A Smart Life key is re-read
+  on every refresh, so a rotated one is caught within minutes. A key from a
+  LEDVANCE or SYLVANIA account is read once, when you typed that password, and
+  nothing re-reads it — so if such a device is re-paired, its key changes and
+  the only symptom is the device going quiet weeks later. The status page now
+  names those devices, says which account would settle it, and links to a
+  sign-in form already filled in.
+
 ## 0.1.23
 
 - **Devices from another brand can now actually be converted.** They appeared

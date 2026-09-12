@@ -117,3 +117,78 @@ def test_refuses_a_file_from_a_newer_schema(tmp_path):
         assert "newer version" in str(exc)
     else:
         raise AssertionError("expected a RuntimeError")
+
+
+class TestKeysWeCannotCheck:
+    """A vendor key is read once and never re-read.
+
+    The Smart Life key is refreshed on every sync, so a rotated one is caught
+    within minutes. A LEDVANCE key is read when somebody types that account's
+    password and never again — so a re-paired device rotates its key and the
+    only symptom is the device going quiet. We cannot detect that, but we can
+    say which account would settle it.
+    """
+
+    def store_with_both(self, tmp_path, now=0.0):
+        from tuya_local_bridge.store import SMART_LIFE, ProvenanceStore
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        store.record_cloud([cloud(id_="own", key="k1")], now=now, source=SMART_LIFE)
+        store.record_cloud(
+            [cloud(id_="gold1", name="gold light 1", key="k2")],
+            now=now,
+            source="ledvance",
+            account="you@example.com",
+        )
+        return store
+
+    def test_a_fresh_vendor_key_raises_nothing(self, tmp_path):
+        store = self.store_with_both(tmp_path, now=1000.0)
+        assert store.unverifiable_keys(max_age_seconds=100.0, now=1050.0) == {}
+
+    def test_an_old_vendor_key_is_grouped_by_its_account(self, tmp_path):
+        store = self.store_with_both(tmp_path, now=0.0)
+
+        groups = store.unverifiable_keys(max_age_seconds=100.0, now=1000.0)
+
+        assert list(groups) == [("ledvance", "you@example.com")]
+        assert [r.device_id for r in groups[("ledvance", "you@example.com")]] == ["gold1"]
+
+    def test_the_smart_life_account_is_never_listed(self, tmp_path):
+        # It is re-read on every refresh, so it is never in doubt.
+        store = self.store_with_both(tmp_path, now=0.0)
+        groups = store.unverifiable_keys(max_age_seconds=100.0, now=1000.0)
+
+        assert all(source != "smartlife" for source, _ in groups)
+
+    def test_a_key_with_no_recorded_source_is_left_alone(self, tmp_path):
+        # Records written before sources were tracked must not start nagging.
+        from tuya_local_bridge.store import ProvenanceStore
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        store.record_cloud([cloud(id_="old", key="k")], now=0.0)
+
+        assert store.unverifiable_keys(max_age_seconds=100.0, now=1000.0) == {}
+
+    def test_signing_in_again_clears_it(self, tmp_path):
+        store = self.store_with_both(tmp_path, now=0.0)
+        assert store.unverifiable_keys(100.0, now=1000.0)
+
+        store.record_cloud(
+            [cloud(id_="gold1", name="gold light 1", key="k2")],
+            now=1000.0,
+            source="ledvance",
+            account="you@example.com",
+        )
+        assert store.unverifiable_keys(100.0, now=1050.0) == {}
+
+    def test_a_rotated_vendor_key_is_still_reported_as_rotated(self, tmp_path):
+        store = self.store_with_both(tmp_path, now=0.0)
+
+        rotated = store.record_cloud(
+            [cloud(id_="gold1", name="gold light 1", key="NEW")],
+            now=1000.0,
+            source="ledvance",
+            account="you@example.com",
+        )
+        assert rotated == ["gold1"]

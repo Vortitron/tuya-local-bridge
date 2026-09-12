@@ -23,6 +23,9 @@ from .models import CloudDevice, LanDevice
 
 SCHEMA_VERSION = 1
 
+# The account a key came from, when it was this session's own Tuya login.
+SMART_LIFE = "smartlife"
+
 
 def _now(now: float | None = None) -> float:
     """Resolve a timestamp, treating an explicit 0.0 as a real value."""
@@ -53,6 +56,12 @@ class DeviceRecord:
     key_first_seen: float = 0.0
     key_last_confirmed: float = 0.0
     key_rotated_at: float | None = None
+    # Which account the key came from. A key fetched from a vendor app
+    # cannot be re-derived without that account's password, so knowing
+    # where it came from is what turns "this key may be stale" from a dead
+    # end into a question we can ask the right person.
+    key_source: str = ""
+    key_account: str = ""
     last_lan_ip: str = ""
     last_seen_on_lan: float | None = None
     protocol_version: str = ""
@@ -119,8 +128,21 @@ class ProvenanceStore:
 
     # ── observation ────────────────────────────────────────────────────────
 
-    def record_cloud(self, devices: Iterable[CloudDevice], now: float | None = None) -> list[str]:
-        """Fold a cloud sync into the store; return ids whose key rotated."""
+    def record_cloud(
+        self,
+        devices: Iterable[CloudDevice],
+        now: float | None = None,
+        *,
+        source: str = "",
+        account: str = "",
+    ) -> list[str]:
+        """Fold a cloud sync into the store; return ids whose key rotated.
+
+        ``source`` and ``account`` record where the key came from — the Smart
+        Life session, or a named vendor app account — so a key that can no
+        longer be verified can be traced back to the login that would verify
+        it.
+        """
         now = _now(now)
         rotated: list[str] = []
 
@@ -135,10 +157,15 @@ class ProvenanceStore:
                     key_last_confirmed=now,
                     product_id=dev.product_id,
                     category=dev.category,
+                    key_source=source,
+                    key_account=account,
                 )
                 continue
 
             rec.name = dev.name or rec.name
+            if source:
+                rec.key_source = source
+                rec.key_account = account or rec.key_account
             rec.product_id = dev.product_id or rec.product_id
             rec.category = dev.category or rec.category
 
@@ -207,6 +234,30 @@ class ProvenanceStore:
             for r in self.devices.values()
             if r.active_migration is not None and r.age_of_key(now) > max_age_seconds
         ]
+
+    def unverifiable_keys(
+        self, max_age_seconds: float, now: float | None = None
+    ) -> dict[tuple[str, str], list[DeviceRecord]]:
+        """Vendor-sourced keys we have not been able to confirm lately.
+
+        A Smart Life key is re-read on every refresh, so it is never stale for
+        long. A vendor key is read once, when somebody typed that account's
+        password, and nothing re-reads it afterwards — so if the device is
+        re-paired the key rotates and nothing here can tell. Grouping the
+        affected devices by the account they came from turns that into a
+        specific request: sign in to *this* account again.
+        """
+        now = _now(now)
+        grouped: dict[tuple[str, str], list[DeviceRecord]] = {}
+        for record in self.devices.values():
+            if not record.key_source or record.key_source == SMART_LIFE:
+                continue
+            if record.age_of_key(now) <= max_age_seconds:
+                continue
+            grouped.setdefault((record.key_source, record.key_account), []).append(record)
+        for records in grouped.values():
+            records.sort(key=lambda r: r.name.lower() or r.device_id)
+        return grouped
 
     def get(self, device_id: str) -> DeviceRecord | None:
         return self.devices.get(device_id)

@@ -440,3 +440,35 @@ def test_every_page_agrees_about_which_devices_exist(tmp_path, monkeypatch):
     assert "ledvance1" in ids, "the vendor device must survive the rebuild"
     assert "smartlife1" in ids
     assert len(folded) == 2, "and must not be duplicated"
+
+
+def test_unverifiable_keys_are_explained_with_a_way_to_fix_them():
+    from tuya_local_bridge.store import DeviceRecord
+
+    records = [DeviceRecord(device_id="g1", name="gold light 1")]
+    html = _render_status(
+        reconcile([], []), {}, [],
+        unverifiable={("ledvance", "you@example.com"): records},
+    )
+
+    assert "cannot be checked from here" in html
+    assert "gold light 1" in html
+    # And the link must carry both, or the offer is just a nag.
+    assert "vendor=ledvance" in html
+    assert "email=you@example.com" in html
+
+
+def test_no_prompt_when_every_key_is_verifiable():
+    html = _render_status(reconcile([], []), {}, [], unverifiable={})
+    assert "cannot be checked from here" not in html
+
+
+def test_a_long_list_is_summarised_rather_than_dumped():
+    from tuya_local_bridge.store import DeviceRecord
+
+    records = [DeviceRecord(device_id=f"g{i}", name=f"gold light {i}") for i in range(9)]
+    html = _render_status(
+        reconcile([], []), {}, [], unverifiable={("ledvance", ""): records}
+    )
+
+    assert "and 3 more" in html
