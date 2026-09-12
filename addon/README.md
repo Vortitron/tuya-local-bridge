@@ -31,6 +31,12 @@ some devices need one choice from you before the ids move.
 Zigbee and Bluetooth devices behind a hub have no individual local key and
 cannot be converted — only Wi-Fi devices and the hubs themselves.
 
+## Undoing
+
+Every id move is recorded and can be undone from the same list it was
+started from. Putting them back means anything referring to those ids is
+talking to Tuya's cloud again.
+
 ## If a device is on your network but not in your account
 
 It is most likely Tuya hardware sold under another brand (LEDVANCE, SYLVANIA

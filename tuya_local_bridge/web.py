@@ -435,6 +435,9 @@ def create_app(
 
         store = ProvenanceStore(store_path)
         rotated = store.record_cloud(cloud_devices)
+        cloud_devices = cloud_devices + stored_devices(
+            store, {d.id for d in cloud_devices}
+        )
         store.record_lan(lan_devices)
         store.save()
 
@@ -759,7 +762,173 @@ def create_app(
         threading.Thread(target=_heal_loop, name="tuya-auto-heal", daemon=True).start()
         logger.info("auto-heal every %.2g h", heal_interval_hours)
 
+    @app.get("/vendor")
+    def vendor_form():
+        from .vendor import VENDORS
+
+        options = "".join(
+            f'<option value="{_esc(key)}">{_esc(v.label)}</option>'
+            for key, v in sorted(VENDORS.items())
+        )
+        return page(
+            "<p>Plenty of &ldquo;not Tuya&rdquo; devices are Tuya hardware sold "
+            "under another brand and paired in that brand&rsquo;s own app, which "
+            "is a separate Tuya account. The Smart Life login cannot see them at "
+            "all, so they show up as devices on your network that no account "
+            "explains.</p>"
+            '<div class="card" style="padding:1rem">'
+            '<form method="post" action="' + _u("vendor_fetch") + '" '
+            'data-working="Signing in —">'
+            f"<p><label>Brand<br><select name=\"vendor\">{options}</select></label></p>"
+            '<p><label>Account email<br><input name="email" type="email" required '
+            'style="padding:.5rem;border-radius:6px;border:1px solid var(--line)">'
+            "</label></p>"
+            '<p><label>Password<br><input name="password" type="password" required '
+            'style="padding:.5rem;border-radius:6px;border:1px solid var(--line)">'
+            "</label></p>"
+            '<p><label>Region <select name="region">'
+            '<option value="eu">Europe</option><option value="us">Americas</option>'
+            '<option value="cn">China</option><option value="in">India</option>'
+            "</select></label> "
+            '<label>Dialling code <input name="country_code" value="44" size="4" '
+            'style="padding:.5rem;border-radius:6px;border:1px solid var(--line)">'
+            "</label></p>"
+            "<button>Fetch the keys</button></form></div>"
+            '<p class="muted">The password is used once to sign in and is never '
+            "stored. Only the device ids and keys are kept.</p>"
+            f'<p><a href="{_u("index")}">Back to status</a></p>',
+            "Devices from another brand",
+        )
+
+    @app.post("/vendor")
+    def vendor_fetch():
+        from .vendor import VendorApiError, VendorAuthError, fetch_devices
+
+        brand = (request.form.get("vendor") or "").strip()
+        email = (request.form.get("email") or "").strip()
+        password = request.form.get("password") or ""
+        region = (request.form.get("region") or "eu").strip()
+        try:
+            country_code = int(request.form.get("country_code") or 44)
+        except ValueError:
+            country_code = 44
+
+        try:
+            devices = fetch_devices(
+                brand, email, password, region=region, country_code=country_code
+            )
+        except VendorAuthError as exc:
+            return page(
+                f'<div class="note"><b>That account was rejected:</b> {_esc(exc)}.<br>'
+                "Use the brand&rsquo;s own app account, not your Tuya or Home "
+                "Assistant login.</div>"
+                f'<p><a href="{_u("vendor_form")}">Try again</a></p>',
+                "Sign-in failed",
+                400,
+            )
+        except VendorApiError as exc:
+            return page(
+                f'<div class="note"><b>Could not read that account:</b> {_esc(exc)}.<br>'
+                "If it was created outside Europe, try another region."
+                "</div>"
+                f'<p><a href="{_u("vendor_form")}">Try again</a></p>',
+                "Sign-in failed",
+                400,
+            )
+
+        store = ProvenanceStore(store_path)
+        rotated = store.record_cloud(devices)
+        store.save()
+
+        rows = "".join(
+            f"<tr><td>{_esc(d.name)}</td><td><code>{_esc(d.id)}</code></td>"
+            f'<td class="muted">{"online" if d.online else "offline"}</td></tr>'
+            for d in sorted(devices, key=lambda x: x.name.lower())
+        )
+        note = (
+            f'<div class="note">The key changed for {len(rotated)} device(s) since '
+            "last time. Any tuya-local entry using the old one is dead — heal or "
+            "re-convert those.</div>"
+            if rotated
+            else ""
+        )
+        return page(
+            f'<div class="card wrap"><table>'
+            f"<tr><th>name</th><th>device id</th><th></th></tr>{rows}</table></div>"
+            f"{note}"
+            f'<p><a href="{_u("index")}">Back to status</a></p> — these are now '
+            "matched against your network like any other device.",
+            f"{len(devices)} devices on the {_esc(brand)} account",
+        )
+
+    @app.post("/rollback/confirm")
+    def rollback_confirm():
+        """Show what putting the ids back would do."""
+        chosen = set(request.form.getlist("device"))
+        store = ProvenanceStore(store_path)
+
+        undoable, problems = [], []
+        for tuya_id in sorted(chosen):
+            record = store.get(tuya_id)
+            live = [m for m in (record.migrations if record else []) if m.rolled_back_at is None]
+            if not live:
+                problems.append((tuya_id, "no id move on record to undo"))
+                continue
+            undoable.append((tuya_id, record.name or tuya_id, live))
+
+        return page(_render_rollback_preview(undoable, problems), "Check before undoing")
+
+    @app.post("/rollback")
+    def rollback_apply():
+        from .swap import rollback
+
+        chosen = set(request.form.getlist("device"))
+        if not chosen:
+            return redirect(_u("index"))
+
+        registry = entity_registry()
+        store = ProvenanceStore(store_path)
+
+        done, failed = [], []
+        for tuya_id in sorted(chosen):
+            try:
+                results = rollback(registry, store, tuya_id)
+            except Exception as exc:
+                logger.exception("rollback failed for %s", tuya_id)
+                failed.append((tuya_id, str(exc)))
+                continue
+            if not results:
+                failed.append((tuya_id, "no id move on record to undo"))
+            for result in results:
+                (done if result.ok else failed).append((result.entity_id, result.detail))
+        store.save()
+        return page(_render_rollback_result(done, failed), "Entity ids put back")
+
     return app
+
+
+def stored_devices(store: ProvenanceStore, known: set[str]) -> list:
+    """Devices whose keys came from a vendor app rather than this session.
+
+    A LEDVANCE or SYLVANIA account is a separate Tuya account the Smart Life
+    login cannot see, so without this its devices stay in the unexplained
+    bucket for ever, which is the one thing the reconciliation is meant to
+    empty.
+    """
+    from .models import CloudDevice
+
+    return [
+        CloudDevice(
+            id=record.device_id,
+            name=record.name or record.device_id,
+            local_key=record.local_key,
+            product_id=record.product_id,
+            category=record.category,
+        )
+        for record in store.devices.values()
+        if record.local_key and record.device_id not in known
+    ]
+
 
 
 def _render_swap_preview(plans, problems) -> str:
@@ -867,6 +1036,69 @@ def _render_swap_preview(plans, problems) -> str:
     return "".join(parts)
 
 
+def _render_rollback_preview(undoable, problems) -> str:
+    """What undoing an id move would restore."""
+    parts: list[str] = []
+
+    if undoable:
+        rows = "".join(
+            f"<tr><td>{_esc(name)}</td>"
+            f"<td><code>{_esc(m.cloud_entity_id)}</code></td>"
+            f'<td class="muted">goes back to</td>'
+            f"<td><code>{_esc(m.local_entity_id_original or '?')}</code></td></tr>"
+            for _tuya_id, name, migrations in undoable
+            for m in migrations
+        )
+        parts.append(
+            "<p>The local entity returns to the id tuya-local gave it, and the "
+            "cloud entity takes its own id back and is re-enabled. Anything "
+            "referring to that id will be talking to the cloud again.</p>"
+            f'<div class="card wrap"><table>'
+            f"<tr><th>device</th><th>entity</th><th></th><th>returns to</th></tr>"
+            f"{rows}</table></div>"
+            '<form method="post" action="' + _u("rollback_apply") + '" '
+            'data-working="Putting ids back —">'
+            + "".join(
+                f'<input type="hidden" name="device" value="{_esc(tuya_id)}">'
+                for tuya_id, _name, _m in undoable
+            )
+            + "<button>Put the ids back</button></form>"
+        )
+
+    if problems:
+        parts.append(
+            '<h2>Nothing to undo</h2><div class="card wrap"><table>'
+            + "".join(
+                f"<tr><td><code>{_esc(str(d))}</code></td>"
+                f'<td class="muted">{_esc(str(why))}</td></tr>'
+                for d, why in problems
+            )
+            + "</table></div>"
+        )
+
+    if not parts:
+        parts.append('<div class="note">Nothing to undo.</div>')
+    parts.append(f'<p><a href="{_u("index")}">Back to status</a></p>')
+    return "".join(parts)
+
+
+def _render_rollback_result(done, failed) -> str:
+    rows = "".join(
+        f"<tr><td><code>{_esc(str(e))}</code></td>"
+        f'<td class="ok">put back</td><td class="muted">{_esc(str(d))}</td></tr>'
+        for e, d in done
+    ) + "".join(
+        f"<tr><td><code>{_esc(str(e))}</code></td>"
+        f'<td class="err">failed</td><td class="muted">{_esc(str(d))}</td></tr>'
+        for e, d in failed
+    )
+    return (
+        f'<div class="card wrap"><table>'
+        f"<tr><th>entity</th><th>result</th><th></th></tr>{rows}</table></div>"
+        f'<p><a href="{_u("index")}">Back to status</a></p>'
+    )
+
+
 def _render_swap_result(done, failed) -> str:
     rows = "".join(
         f"<tr><td><code>{_esc(str(e))}</code></td>"
@@ -907,6 +1139,10 @@ _PLAIN_PATHS = {
     "convert_start": "/convert",
     "convert_finish": "/convert/finish",
     "swap_confirm": "/swap/confirm",
+    "rollback_confirm": "/rollback/confirm",
+    "rollback_apply": "/rollback",
+    "vendor_form": "/vendor",
+    "vendor_fetch": "/vendor",
     "swap_apply": "/swap",
 }
 
@@ -1013,13 +1249,9 @@ def _render_status(
             '<div class="card wrap"><table>'
             "<tr><th></th><th>name</th><th>device id</th><th></th></tr>"
             + "".join(
-                "<tr><td>"
-                + (
-                    '<span class="ok" title="entity ids already moved">&#10003;</span>'
-                    if c.id in swapped
-                    else f'<input type="checkbox" name="device" value="{_esc(c.id)}">'
-                )
-                + f"</td><td>{_esc(c.name)}</td>"
+                f'<tr><td><input type="checkbox" name="device" '
+                f'value="{_esc(c.id)}"></td>'
+                f"<td>{_esc(c.name)}</td>"
                 f"<td><code>{_esc(c.id)}</code></td>"
                 f'<td class="muted">'
                 + ("ids moved" if c.id in swapped else ("online" if c.online else "offline"))
@@ -1027,9 +1259,12 @@ def _render_status(
                 for c in result.converted
             )
             + "</table></div>"
+            + "<button>Move the entity ids across</button>"
             + (
-                "<button>Move the entity ids across</button>"
-                if any(c.id not in swapped for c in result.converted)
+                ' <button formaction="'
+                + _u("rollback_confirm")
+                + '">Undo an id move</button>'
+                if any(c.id in swapped for c in result.converted)
                 else ""
             )
             + "</form>"
@@ -1054,8 +1289,9 @@ def _render_status(
             '<p class="muted">Tuya hardware this account cannot see. Most often '
             "these are sold under another brand (LEDVANCE and many others) and "
             "paired in that brand&rsquo;s own app, which is a separate Tuya "
-            "account; sometimes they have simply been reset. Either way no key "
-            "is available here.</p>"
+            "account; sometimes they have simply been reset.</p>"
+            f'<p><a href="{_u("vendor_form")}">Sign in to another brand&rsquo;s '
+            "account</a> to fetch their keys as well.</p>"
             '<div class="card wrap"><table>'
             + "".join(
                 f"<tr><td><code>{_esc(d.ip)}</code></td><td><code>{_esc(d.id)}</code></td></tr>"

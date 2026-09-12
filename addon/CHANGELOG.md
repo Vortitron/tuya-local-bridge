@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.22
+
+- **Other brands can be signed in to from the add-on.** LEDVANCE, SYLVANIA and
+  other white-label Tuya apps are separate accounts the Smart Life login
+  cannot see, so their devices sat in the unexplained list for ever. There is
+  now a form beside that list; the password is used once and never stored, and
+  the keys join the reconciliation like any others.
+- **Undoing an id move is a button.** Both it and the swap were command-line
+  only, which is no use to anyone running the add-on — and an undo you cannot
+  reach is not really an undo.
+- The undo preview says the thing people will not have thought of: putting the
+  ids back means anything referring to them is talking to the cloud again.
+
 ## 0.1.21
 
 - **A choice made for one device is no longer offered to another.** Swapping

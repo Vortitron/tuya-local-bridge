@@ -168,26 +168,32 @@ def test_already_converted_devices_can_be_selected_for_a_swap():
     assert "Move the entity ids across" in html
 
 
-def test_a_device_whose_ids_already_moved_is_not_offered_again():
+def test_a_device_whose_ids_moved_is_labelled_as_such():
+    # It stays selectable -- it has to be, to be undone -- but the list says
+    # which state it is in rather than inviting the same action blindly.
     html = _render_status(converted_result("abc"), {}, [], swapped=frozenset({"abc"}))
 
-    assert 'name="device" value="abc"' not in html
+    assert 'name="device" value="abc"' in html
     assert "ids moved" in html
 
 
-def test_the_button_disappears_when_every_device_is_done():
-    html = _render_status(converted_result("abc"), {}, [], swapped=frozenset({"abc"}))
-    assert "Move the entity ids across" not in html
+def test_undo_is_offered_only_once_something_has_moved():
+    plain = _render_status(converted_result("abc"), {}, [])
+    assert "Undo an id move" not in plain
+
+    moved = _render_status(converted_result("abc"), {}, [], swapped=frozenset({"abc"}))
+    assert "Undo an id move" in moved
 
 
-def test_a_mix_offers_only_the_ones_still_needing_it():
+def test_both_actions_share_one_form_so_the_selection_serves_either():
     html = _render_status(
         converted_result("abc", "def"), {}, [], swapped=frozenset({"abc"})
     )
 
+    assert 'name="device" value="abc"' in html
     assert 'name="device" value="def"' in html
-    assert 'name="device" value="abc"' not in html
     assert "Move the entity ids across" in html
+    assert "formaction" in html
 
 
 def test_the_section_says_why_it_matters():
@@ -319,3 +325,85 @@ def test_one_devices_choice_is_not_offered_to_another(monkeypatch, tmp_path):
     assert refusals == [], "a choice for another device must not be refused here"
     assert len(plan_a.pairs) == 1
     assert plan_b.pairs == []
+
+
+# ── Undoing an id move, and other brands, from the interface ───────────────
+
+from tuya_local_bridge.store import Migration  # noqa: E402
+from tuya_local_bridge.web import (  # noqa: E402
+    _render_rollback_preview,
+    _render_rollback_result,
+)
+
+
+def _migration():
+    return Migration(
+        cloud_entity_id="light.front_porch",
+        local_entity_id="light.front_porch",
+        local_entity_id_original="light.front_porch_local",
+        migrated_at=1.0,
+    )
+
+
+def test_the_undo_preview_says_where_each_id_goes_back_to():
+    html = _render_rollback_preview([("abc", "Front Porch", [_migration()])], [])
+
+    assert "light.front_porch" in html
+    assert "light.front_porch_local" in html
+    assert "Put the ids back" in html
+
+
+def test_the_undo_preview_warns_it_returns_you_to_the_cloud():
+    # The consequence people will not have thought about.
+    html = _render_rollback_preview([("abc", "Front Porch", [_migration()])], [])
+    assert "talking to the cloud again" in html
+
+
+def test_a_device_with_nothing_recorded_offers_no_undo_button():
+    html = _render_rollback_preview([], [("abc", "no id move on record to undo")])
+
+    assert "Put the ids back" not in html
+    assert "no id move on record to undo" in html
+
+
+def test_the_undo_result_reports_failures():
+    html = _render_rollback_result([], [("light.a", "boom")])
+    assert "failed" in html
+    assert "boom" in html
+
+
+def test_the_unexplained_section_points_at_the_vendor_login():
+    from tuya_local_bridge.models import LanDevice
+
+    result = reconcile([], [LanDevice(id="ghost", ip="192.168.1.99")])
+    html = _render_status(result, {}, [])
+
+    assert "another brand" in html
+    assert "/vendor" in html
+
+
+def test_stored_vendor_keys_join_the_picture(tmp_path):
+    from tuya_local_bridge.models import CloudDevice
+    from tuya_local_bridge.store import ProvenanceStore
+    from tuya_local_bridge.web import stored_devices
+
+    store = ProvenanceStore(str(tmp_path / "p.json"))
+    store.record_cloud(
+        [CloudDevice(id="ledvance1", name="gold light 1", local_key="k")], now=1.0
+    )
+
+    extra = stored_devices(store, known={"smartlife1"})
+
+    assert [d.id for d in extra] == ["ledvance1"]
+    assert extra[0].local_key == "k"
+
+
+def test_devices_already_in_this_session_are_not_duplicated(tmp_path):
+    from tuya_local_bridge.models import CloudDevice
+    from tuya_local_bridge.store import ProvenanceStore
+    from tuya_local_bridge.web import stored_devices
+
+    store = ProvenanceStore(str(tmp_path / "p.json"))
+    store.record_cloud([CloudDevice(id="abc", name="x", local_key="k")], now=1.0)
+
+    assert stored_devices(store, known={"abc"}) == []
