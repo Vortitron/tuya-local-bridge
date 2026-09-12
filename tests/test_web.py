@@ -472,3 +472,20 @@ def test_a_long_list_is_summarised_rather_than_dumped():
     )
 
     assert "and 3 more" in html
+
+
+def test_devices_whose_names_never_followed_are_offered_a_catch_up():
+    html = _render_status(
+        reconcile([], []), {}, [],
+        needing_rename=[("bf2d4fc9", "ice ice machine"), ("bfed759f", "hot water")],
+    )
+
+    assert "Device names have not followed" in html
+    assert "ice ice machine" in html
+    assert "Move the device names too" in html
+    assert "/rename" in html
+
+
+def test_no_catch_up_offered_when_nothing_is_half_done():
+    html = _render_status(reconcile([], []), {}, [], needing_rename=[])
+    assert "Device names have not followed" not in html

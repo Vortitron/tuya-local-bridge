@@ -46,6 +46,24 @@ class Migration:
 
 
 @dataclass
+class DeviceRename:
+    """Record of a device-name swap, kept so it can be undone.
+
+    Entity ids carry automations; device *names* carry the humans. After an
+    entity swap the local device holds the ids while the cloud device keeps the
+    familiar name, which leaves two identically named devices and no way to
+    tell which one anything is pointing at.
+    """
+
+    cloud_device_id: str
+    local_device_id: str
+    cloud_name_before: str
+    local_name_before: str
+    renamed_at: float
+    rolled_back_at: float | None = None
+
+
+@dataclass
 class DeviceRecord:
     """Everything we know about one device, across time."""
 
@@ -68,6 +86,14 @@ class DeviceRecord:
     product_id: str = ""
     category: str = ""
     migrations: list[Migration] = field(default_factory=list)
+    renames: list[DeviceRename] = field(default_factory=list)
+
+    @property
+    def active_rename(self) -> DeviceRename | None:
+        for r in reversed(self.renames):
+            if r.rolled_back_at is None:
+                return r
+        return None
 
     @property
     def active_migration(self) -> Migration | None:
@@ -102,7 +128,10 @@ class ProvenanceStore:
             )
         for did, raw in (data.get("devices") or {}).items():
             migrations = [Migration(**m) for m in raw.pop("migrations", [])]
-            self.devices[did] = DeviceRecord(**raw, migrations=migrations)
+            renames = [DeviceRename(**r) for r in raw.pop("renames", [])]
+            self.devices[did] = DeviceRecord(
+                **raw, migrations=migrations, renames=renames
+            )
 
     def save(self) -> None:
         """Atomic write — a half-written provenance file loses migration history."""
@@ -169,12 +198,20 @@ class ProvenanceStore:
             rec.product_id = dev.product_id or rec.product_id
             rec.category = dev.category or rec.category
 
-            if dev.local_key and dev.local_key != rec.local_key:
+            # Learning a key for the first time is not a rotation. Records are
+            # created by LAN discovery before any account has been consulted,
+            # so without this the first key ever seen for a device is reported
+            # as "rotated -- your entry is dead", which is alarming and wrong.
+            if dev.local_key and rec.local_key and dev.local_key != rec.local_key:
                 rec.local_key = dev.local_key
                 rec.key_generation += 1
                 rec.key_rotated_at = now
                 rec.key_first_seen = now
                 rotated.append(dev.id)
+
+            elif dev.local_key and not rec.local_key:
+                rec.local_key = dev.local_key
+                rec.key_first_seen = now
 
             if dev.local_key:
                 rec.key_last_confirmed = now
@@ -213,6 +250,28 @@ class ProvenanceStore:
         )
         rec.migrations.append(migration)
         return migration
+
+    def record_rename(
+        self,
+        device_id: str,
+        cloud_device_id: str,
+        local_device_id: str,
+        cloud_name_before: str,
+        local_name_before: str,
+        now: float | None = None,
+    ) -> DeviceRename:
+        rec = self.devices.get(device_id)
+        if rec is None:
+            rec = self.devices[device_id] = DeviceRecord(device_id=device_id)
+        rename = DeviceRename(
+            cloud_device_id=cloud_device_id,
+            local_device_id=local_device_id,
+            cloud_name_before=cloud_name_before,
+            local_name_before=local_name_before,
+            renamed_at=_now(now),
+        )
+        rec.renames.append(rename)
+        return rename
 
     def record_rollback(self, device_id: str, now: float | None = None) -> Migration | None:
         rec = self.devices.get(device_id)

@@ -1,4 +1,6 @@
 
+import pytest
+
 from tuya_local_bridge.store import ProvenanceStore
 from tuya_local_bridge.swap import (
     apply_swap,
@@ -355,3 +357,97 @@ class TestChoosingPairsByHand:
         refused = add_manual_pairs(p, {"light.a": "light.b"})
         assert "light.a" in refused
         assert len(p.pairs) == 1
+
+
+class TestTheDeviceNameFollowsTheIds:
+    """Entity ids carry automations; device names carry the humans.
+
+    After a swap the local device holds every id that matters while the cloud
+    device keeps the familiar name, so two identically named devices sit side
+    by side and nothing says which is which.
+    """
+
+    CLOUD = {"id": "ha_cloud", "name": "ice ice machine", "name_by_user": None}
+    LOCAL = {"id": "ha_local", "name": "ice ice machine", "name_by_user": None}
+
+    class _Registry:
+        def __init__(self, fail_on=None):
+            self.calls = []
+            self.fail_on = fail_on or set()
+
+        def update_device(self, device_id, **changes):
+            if device_id in self.fail_on:
+                raise RuntimeError("boom")
+            self.calls.append((device_id, changes))
+            return {}
+
+    def test_the_local_device_takes_the_name(self, tmp_path):
+        from tuya_local_bridge.store import ProvenanceStore
+        from tuya_local_bridge.swap import apply_rename
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        registry = self._Registry()
+
+        result = apply_rename(registry, store, "abc", self.CLOUD, self.LOCAL)
+
+        assert result == "ice ice machine"
+        # Cloud first: two devices must not both hold the name, even briefly.
+        assert registry.calls[0] == ("ha_cloud", {"name_by_user": "ice ice machine (cloud)"})
+        assert registry.calls[1] == ("ha_local", {"name_by_user": "ice ice machine"})
+
+    def test_a_name_the_user_chose_is_the_one_that_moves(self, tmp_path):
+        from tuya_local_bridge.store import ProvenanceStore
+        from tuya_local_bridge.swap import apply_rename
+
+        cloud = {"id": "ha_cloud", "name": "hot water", "name_by_user": "Hot Water"}
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        registry = self._Registry()
+
+        assert apply_rename(registry, store, "abc", cloud, self.LOCAL) == "Hot Water"
+
+    def test_renaming_twice_does_nothing(self, tmp_path):
+        from tuya_local_bridge.store import ProvenanceStore
+        from tuya_local_bridge.swap import apply_rename
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        done = {"id": "ha_local", "name": "x", "name_by_user": "ice ice machine"}
+        cloud_done = {"id": "ha_cloud", "name_by_user": "ice ice machine (cloud)"}
+
+        assert apply_rename(self._Registry(), store, "abc", cloud_done, done) is None
+
+    def test_a_half_done_rename_is_put_back(self, tmp_path):
+        from tuya_local_bridge.store import ProvenanceStore
+        from tuya_local_bridge.swap import apply_rename
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        registry = self._Registry(fail_on={"ha_local"})
+
+        with pytest.raises(RuntimeError):
+            apply_rename(registry, store, "abc", self.CLOUD, self.LOCAL)
+
+        # The cloud name must not be left suffixed with nothing taking its place.
+        assert registry.calls[-1] == ("ha_cloud", {"name_by_user": None})
+        assert not store.devices.get("abc", None) or not store.get("abc").renames
+
+    def test_the_rename_can_be_undone(self, tmp_path):
+        from tuya_local_bridge.store import ProvenanceStore
+        from tuya_local_bridge.swap import apply_rename, rollback_rename
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        apply_rename(self._Registry(), store, "abc", self.CLOUD, self.LOCAL)
+
+        registry = self._Registry()
+        assert rollback_rename(registry, store, "abc") == ""
+        assert registry.calls[0][0] == "ha_local"
+        assert registry.calls[1][0] == "ha_cloud"
+        assert store.get("abc").active_rename is None
+
+    def test_undoing_twice_does_nothing(self, tmp_path):
+        from tuya_local_bridge.store import ProvenanceStore
+        from tuya_local_bridge.swap import apply_rename, rollback_rename
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        apply_rename(self._Registry(), store, "abc", self.CLOUD, self.LOCAL)
+        rollback_rename(self._Registry(), store, "abc")
+
+        assert rollback_rename(self._Registry(), store, "abc") is None

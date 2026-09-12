@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.25
+
+- **The device name now follows the entity ids.** The local device takes the
+  cloud device's name and the cloud one gains a `(cloud)` suffix, so two
+  identically named devices no longer sit side by side in every picker.
+  Devices swapped before this existed are offered a catch-up on the status
+  page.
+- **Learning a key is no longer reported as losing one.** A record is created
+  the moment a device is heard on the network, before any account has been
+  consulted, so the first key ever fetched was announced as "rotated — your
+  entry is dead". Five LEDVANCE bulbs said exactly that, at the instant their
+  keys were first read.
+
 ## 0.1.24
 
 - **Says when a key can no longer be vouched for.** A Smart Life key is re-read

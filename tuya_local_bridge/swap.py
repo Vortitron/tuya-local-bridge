@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -356,6 +357,93 @@ def _now() -> float:
     return time.time()
 
 
+CLOUD_SUFFIX = " (cloud)"
+
+
+def device_display_name(device: dict[str, Any]) -> str:
+    """What Home Assistant shows for a device: the user's name, else its own."""
+    return str(device.get("name_by_user") or device.get("name") or "")
+
+
+def plan_rename(cloud_device: dict, local_device: dict) -> tuple[str, str] | None:
+    """(name for the local device, name for the cloud device), or None.
+
+    After an entity swap the local device holds every id that matters while the
+    cloud device keeps the familiar name, so two identically named devices sit
+    side by side and nothing says which is which. The name follows the ids.
+
+    Returns None when there is nothing worth doing -- no name to move, or it
+    has already been moved.
+    """
+    wanted = device_display_name(cloud_device)
+    if not wanted or wanted.endswith(CLOUD_SUFFIX):
+        # The suffix is the marker that this has already been done. Matching
+        # display names is *not*: tuya-local usually names its device exactly
+        # what the cloud integration named its own, so two identical names is
+        # the collision this exists to resolve, not evidence it is resolved.
+        return None
+    return wanted, wanted + CLOUD_SUFFIX
+
+
+def apply_rename(
+    registry,
+    store: ProvenanceStore,
+    tuya_id: str,
+    cloud_device: dict,
+    local_device: dict,
+) -> str | None:
+    """Give the local device the cloud device's name. Returns what it is now.
+
+    The cloud device is renamed first. Two devices may not share a name in any
+    useful sense, and leaving the old one holding it while the new one waits is
+    the state this exists to end.
+    """
+    planned = plan_rename(cloud_device, local_device)
+    if planned is None:
+        return None
+    local_name, cloud_name = planned
+
+    # Record the *user override* rather than the displayed name. Restoring a
+    # display name would pin an integration-supplied name as a user override,
+    # so undoing would leave the device subtly different from how it started.
+    cloud_before = str(cloud_device.get("name_by_user") or "")
+    local_before = str(local_device.get("name_by_user") or "")
+
+    registry.update_device(str(cloud_device["id"]), name_by_user=cloud_name)
+    try:
+        registry.update_device(str(local_device["id"]), name_by_user=local_name)
+    except Exception:
+        # Put the cloud name back rather than leave both devices renamed
+        # halfway, which is harder to understand than not having started.
+        with suppress(Exception):
+            registry.update_device(
+                str(cloud_device["id"]), name_by_user=cloud_before or None
+            )
+        raise
+
+    store.record_rename(
+        tuya_id,
+        cloud_device_id=str(cloud_device["id"]),
+        local_device_id=str(local_device["id"]),
+        cloud_name_before=cloud_before,
+        local_name_before=local_before,
+    )
+    return local_name
+
+
+def rollback_rename(registry, store: ProvenanceStore, tuya_id: str) -> str | None:
+    """Put the device names back. Returns the name restored to the cloud device."""
+    record = store.get(tuya_id)
+    rename = record.active_rename if record else None
+    if rename is None:
+        return None
+
+    registry.update_device(rename.local_device_id, name_by_user=rename.local_name_before or None)
+    registry.update_device(rename.cloud_device_id, name_by_user=rename.cloud_name_before or None)
+    rename.rolled_back_at = _now()
+    return rename.cloud_name_before
+
+
 # ── transports ─────────────────────────────────────────────────────────────
 
 
@@ -388,6 +476,11 @@ class VomeHomeEntityRegistry:
         payload.update(changes)
         return self._command(payload)
 
+    def update_device(self, device_id: str, **changes: Any) -> dict[str, Any]:
+        payload = {"type": "config/device_registry/update", "device_id": device_id}
+        payload.update(changes)
+        return self._command(payload)
+
 
 class DirectEntityRegistry:
     """Entity registry straight from Home Assistant over WebSocket."""
@@ -406,5 +499,12 @@ class DirectEntityRegistry:
         from .ha_ws import command
 
         payload = {"type": "config/entity_registry/update", "entity_id": entity_id}
+        payload.update(changes)
+        return command(self.base_url, self.token, payload)
+
+    def update_device(self, device_id: str, **changes: Any) -> dict[str, Any]:
+        from .ha_ws import command
+
+        payload = {"type": "config/device_registry/update", "device_id": device_id}
         payload.update(changes)
         return command(self.base_url, self.token, payload)

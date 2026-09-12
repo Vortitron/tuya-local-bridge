@@ -33,9 +33,11 @@ from .swap import (
     DirectEntityRegistry,
     VomeHomeEntityRegistry,
     add_manual_pairs,
+    apply_rename,
     apply_swap,
     candidates_for,
     entities_for_device,
+    plan_rename,
     plan_swap,
 )
 
@@ -264,6 +266,43 @@ def create_app(
             owners = ha_discovery.config_entry_domains_direct(ha_url or "", ha_token or "")
         return ha_discovery.map_devices(raw, entry_domains=owners)
 
+    def rename_devices(registry, store, tuya_id: str) -> str | None:
+        """Give the local device the cloud device's name."""
+        devices = device_map()
+        mapping = devices.get(tuya_id) or {}
+        if "tuya" not in mapping or "tuya_local" not in mapping:
+            return None
+        registry_devices = {d["id"]: d for d in raw_device_registry()}
+        cloud = registry_devices.get(mapping["tuya"])
+        local = registry_devices.get(mapping["tuya_local"])
+        if not cloud or not local:
+            return None
+        return apply_rename(registry, store, tuya_id, cloud, local)
+
+    def raw_device_registry():
+        if use_broker():
+            return ha_discovery.device_registry_vomehome(
+                instance_id, vomehome_token, api_url
+            )
+        return ha_discovery.device_registry_direct(ha_url or "", ha_token or "")
+
+    def devices_needing_a_rename(store) -> list[tuple[str, str]]:
+        """Swapped devices whose names never followed. (tuya id, name)."""
+        devices = device_map()
+        registry_devices = {d["id"]: d for d in raw_device_registry()}
+        pending = []
+        for tuya_id, record in store.devices.items():
+            if record.active_migration is None:
+                continue
+            mapping = devices.get(tuya_id) or {}
+            cloud = registry_devices.get(mapping.get("tuya", ""))
+            local = registry_devices.get(mapping.get("tuya_local", ""))
+            if not cloud or not local:
+                continue
+            if plan_rename(cloud, local) is not None:
+                pending.append((tuya_id, record.name or tuya_id))
+        return pending
+
     def swap_plans(device_ids):
         """(plans, problems) for the devices asked about."""
         registry = entity_registry()
@@ -481,6 +520,7 @@ def create_app(
                 scan_error=scan_error,
                 scan_elapsed=int(time.time() - scan_started) if scanning else 0,
                 unverifiable=store.unverifiable_keys(UNVERIFIED_KEY_SECONDS),
+                needing_rename=devices_needing_a_rename(store),
             ),
             f"{session.username or 'connected'} — {len(cloud_devices)} devices on the account",
             # While a scan runs the page is incomplete, so bring the answer to
@@ -704,6 +744,19 @@ def create_app(
                     if result.ok
                     else (result.entity_id, result.detail or "failed")
                 )
+
+            # The name follows the ids. Without this the cloud device keeps the
+            # familiar name while the local one holds everything that matters,
+            # which leaves two identically named devices in the picker.
+            try:
+                named = rename_devices(registry, store, tuya_id)
+            except Exception as exc:
+                logger.exception("could not rename devices for %s", tuya_id)
+                failed.append((tuya_id, f"entity ids moved, but renaming failed: {exc}"))
+            else:
+                if named:
+                    done.append((named, "device renamed"))
+
         store.save()
         return page(_render_swap_result(done, failed), "Entity ids moved")
 
@@ -928,6 +981,25 @@ def create_app(
                 (done if result.ok else failed).append((result.entity_id, result.detail))
         store.save()
         return page(_render_rollback_result(done, failed), "Entity ids put back")
+
+    @app.post("/rename")
+    def rename_apply():
+        """Finish devices whose ids moved before names did."""
+        registry = entity_registry()
+        store = ProvenanceStore(store_path)
+
+        done, failed = [], []
+        for tuya_id, name in devices_needing_a_rename(store):
+            try:
+                renamed = rename_devices(registry, store, tuya_id)
+            except Exception as exc:
+                logger.exception("rename failed for %s", tuya_id)
+                failed.append((name, str(exc)))
+                continue
+            if renamed:
+                done.append((renamed, "device renamed"))
+        store.save()
+        return page(_render_swap_result(done, failed), "Device names moved")
 
     return app
 
@@ -1164,6 +1236,7 @@ _PLAIN_PATHS = {
     "convert_start": "/convert",
     "convert_finish": "/convert/finish",
     "swap_confirm": "/swap/confirm",
+    "rename_apply": "/rename",
     "rollback_confirm": "/rollback/confirm",
     "rollback_apply": "/rollback",
     "vendor_form": "/vendor",
@@ -1203,6 +1276,7 @@ def _render_status(
     scan_error: str | None = None,
     scan_elapsed: int = 0,
     unverifiable: dict | None = None,
+    needing_rename: list | None = None,
 ) -> str:
     parts: list[str] = []
 
@@ -1253,6 +1327,22 @@ def _render_status(
             f'<a href="{_u("vendor_form")}?vendor={_esc(source)}'
             + (f"&email={_esc(account)}" if account else "")
             + '">Sign in again to refresh them</a>.</div>'
+        )
+
+    if needing_rename:
+        # Automations can target a device as well as an entity, and a device
+        # reference survives no rename -- so this is about the picker being
+        # legible, not about anything being repaired.
+        names = ", ".join(_esc(n) for _id, n in needing_rename[:6])
+        more = f" and {len(needing_rename) - 6} more" if len(needing_rename) > 6 else ""
+        parts.append(
+            '<div class="note"><b>Device names have not followed.</b> '
+            f"{names}{more} had their entity ids moved before this add-on could "
+            "rename devices, so the cloud device still holds the familiar name "
+            "and two identical entries sit in every picker.<br>"
+            '<form method="post" action="' + _u("rename_apply") + '" '
+            'data-working="Renaming —"><button>Move the device names too</button>'
+            "</form></div>"
         )
 
     if rotated:

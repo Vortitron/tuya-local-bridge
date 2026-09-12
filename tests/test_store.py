@@ -192,3 +192,47 @@ class TestKeysWeCannotCheck:
             account="you@example.com",
         )
         assert rotated == ["gold1"]
+
+
+class TestLearningAKeyIsNotLosingOne:
+    """Records exist before any key does.
+
+    LAN discovery creates a record the moment a device is heard broadcasting,
+    long before an account has been consulted. Counting the first key as a
+    rotation told five LEDVANCE bulbs their keys had changed and their entries
+    were dead, at the exact instant the keys were first fetched.
+    """
+
+    def test_the_first_key_on_a_discovered_device_is_not_a_rotation(self, tmp_path):
+        from tuya_local_bridge.models import LanDevice
+        from tuya_local_bridge.store import ProvenanceStore
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        store.record_lan([LanDevice(id="gold1", ip="192.168.1.171")], now=0.0)
+
+        rotated = store.record_cloud([cloud(id_="gold1", key="k1")], now=10.0)
+
+        assert rotated == [], "learning a key is not losing one"
+        record = store.get("gold1")
+        assert record.local_key == "k1"
+        assert record.key_generation == 1
+        assert record.key_first_seen == 10.0
+
+    def test_a_genuine_change_is_still_a_rotation(self, tmp_path):
+        from tuya_local_bridge.store import ProvenanceStore
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        store.record_cloud([cloud(id_="d", key="k1")], now=0.0)
+
+        assert store.record_cloud([cloud(id_="d", key="k2")], now=10.0) == ["d"]
+        assert store.get("d").key_generation == 2
+
+    def test_the_same_key_again_changes_nothing(self, tmp_path):
+        from tuya_local_bridge.store import ProvenanceStore
+
+        store = ProvenanceStore(str(tmp_path / "p.json"))
+        store.record_cloud([cloud(id_="d", key="k1")], now=0.0)
+
+        assert store.record_cloud([cloud(id_="d", key="k1")], now=10.0) == []
+        assert store.get("d").key_generation == 1
+        assert store.get("d").key_last_confirmed == 10.0
