@@ -27,6 +27,7 @@ from .convert import (
     convert,
     reachable,
 )
+from .heal import DirectOptionsFlowClient
 from .match import drop_shared_addresses, merge_lan, reconcile
 from .store import SMART_LIFE, ProvenanceStore
 from .swap import (
@@ -47,6 +48,9 @@ logger = logging.getLogger(__name__)
 # Long enough not to nag, short enough to notice before a re-pairing is
 # forgotten about.
 UNVERIFIED_KEY_SECONDS = 30 * 24 * 3600
+
+# Re-reading every automation is expensive; they change rarely.
+AUTOMATION_CACHE_SECONDS = 600
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -311,7 +315,24 @@ def create_app(
 
         return AutomationStore(ha_url, ha_token)
 
-    def automations_pointing_at_cloud(store):
+    automation_cache: dict[str, Any] = {"at": 0.0, "found": []}
+
+    def automations_pointing_at_cloud(store, force: bool = False):
+        """Cached: this reads every automation, and there can be hundreds.
+
+        Ninety-eight configs on one real install, one HTTP call each, on every
+        render of the status page — which is the difference between a page and
+        a wait. It changes only when somebody edits an automation or converts
+        a device, so a few minutes of staleness costs nothing.
+        """
+        fresh = (time.time() - automation_cache["at"]) < AUTOMATION_CACHE_SECONDS
+        if fresh and not force:
+            return automation_cache["found"]
+        found = _scan_automations(store)
+        automation_cache.update(at=time.time(), found=found)
+        return found
+
+    def _scan_automations(store):
         """[(tuya_id, device name, [(automation_id, alias, count)])].
 
         Only for devices whose ids have already moved: before that, pointing at
@@ -547,9 +568,14 @@ def create_app(
 
         session = cloud_mod.TuyaCloudSession.load(session_path)
         cloud_devices = session.devices()
-        lan_devices, flows, converted = discovery(
-            force_scan=request.args.get("rescan") == "1"
-        )
+        if request.args.get("rescan") == "1":
+            # Start it, then get the parameter out of the address bar. The
+            # refresh below re-requests whatever URL the browser is on, so
+            # leaving it there restarts the scan every six seconds for ever.
+            lan_scan(force=True)
+            return redirect(_u("index"))
+
+        lan_devices, flows, converted = discovery()
 
         store = ProvenanceStore(store_path)
         rotated = store.record_cloud(cloud_devices, source=SMART_LIFE)
@@ -1065,7 +1091,9 @@ def create_app(
     def automations_confirm():
         store = ProvenanceStore(store_path)
         return page(
-            _render_automations_preview(automations_pointing_at_cloud(store)),
+            _render_automations_preview(
+                automations_pointing_at_cloud(store, force=True)
+            ),
             "Check before repointing",
         )
 
@@ -1110,6 +1138,73 @@ def create_app(
                 done.append((alias, f"{count} reference(s) repointed"))
         store.save()
         return page(_render_swap_result(done, failed), "Automations repointed")
+
+    @app.post("/resync")
+    def resync_apply():
+        """Push current address, key and protocol into an existing entry.
+
+        Healing only acts where it can prove something moved. But a device can
+        be plainly reachable and its tuya-local entry still refuse to load —
+        an address recorded weeks ago, a key from before a re-pairing, a
+        protocol the firmware changed — and then there is nothing to compare
+        against because the entry is the only record of what it was told.
+        Re-sending what we can see now costs nothing and fixes all three.
+        """
+        from .heal import Drift, HealError, entry_ids_for_devices, repair
+
+        chosen = set(request.form.getlist("device"))
+        if not chosen:
+            return redirect(_u("index"))
+        if not (ha_url and ha_token):
+            return page(
+                '<div class="note">Re-syncing needs a direct Home Assistant '
+                "connection — the options-flow API is not routed through the "
+                "relay.</div>",
+                "Cannot re-sync",
+                400,
+            )
+
+        store = ProvenanceStore(store_path)
+        cloud_devices = {d.id: d for d in cloud_inventory()}
+        lan_devices, _flows, _converted = discovery()
+        seen = {d.id: d for d in lan_devices}
+        entry_ids = entry_ids_for_devices(raw_device_registry())
+        client = DirectOptionsFlowClient(ha_url, ha_token)
+
+        done, failed = [], []
+        for tuya_id in sorted(chosen):
+            record = store.get(tuya_id)
+            entry_id = entry_ids.get(tuya_id, "")
+            if not entry_id:
+                failed.append((tuya_id, "no tuya-local entry to update"))
+                continue
+            device = cloud_devices.get(tuya_id)
+            lan = seen.get(tuya_id)
+            drift = Drift(
+                device_id=tuya_id,
+                name=(device.name if device else "") or (record.name if record else ""),
+                entry_id=entry_id,
+                known_ip=record.last_lan_ip if record else "",
+                known_key=record.local_key if record else "",
+                current_ip=lan.ip if lan else "",
+                current_version=lan.version if lan else "",
+                current_key=device.local_key if device else "",
+            )
+            if not (drift.current_ip or drift.known_ip):
+                failed.append((drift.name or tuya_id, "no address known for it"))
+                continue
+            try:
+                repair(client, drift)
+            except HealError as exc:
+                failed.append((drift.name or tuya_id, str(exc)))
+                continue
+            done.append(
+                (drift.name or tuya_id, f"re-sent {drift.current_ip or drift.known_ip}")
+            )
+
+        store.record_lan(lan_devices)
+        store.save()
+        return page(_render_swap_result(done, failed), "Re-synced")
 
     return app
 
@@ -1387,6 +1482,7 @@ _PLAIN_PATHS = {
     "automations_confirm": "/automations/confirm",
     "automations_apply": "/automations",
     "rename_apply": "/rename",
+    "resync_apply": "/resync",
     "rollback_confirm": "/rollback/confirm",
     "rollback_apply": "/rollback",
     "vendor_form": "/vendor",
@@ -1554,6 +1650,9 @@ def _render_status(
             )
             + "</table></div>"
             + "<button>Move the entity ids across</button>"
+            + ' <button formaction="'
+            + _u("resync_apply")
+            + '" data-working="Re-syncing —">Re-sync with tuya-local</button>'
             + (
                 ' <button formaction="'
                 + _u("rollback_confirm")

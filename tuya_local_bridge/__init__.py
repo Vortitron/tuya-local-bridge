@@ -3,7 +3,7 @@ from .match import reconcile
 from .models import CloudDevice, LanDevice, MatchedDevice, Reconciliation
 from .store import DeviceRecord, Migration, ProvenanceStore
 
-__version__ = "0.1.26"
+__version__ = "0.1.27"
 
 __all__ = [
     "CloudDevice",

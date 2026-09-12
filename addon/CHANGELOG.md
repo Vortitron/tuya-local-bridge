@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.27
+
+- **The scan no longer loops.** "Rescan" left `?rescan=1` in the address bar
+  and the page's own refresh re-requested it, starting another scan every six
+  seconds — a counter going 16s, 0s, 16s for ever. It now starts the scan and
+  drops the parameter.
+- **The status page is quick again.** Checking for automations that point at a
+  cloud device read every automation on the instance on every page load —
+  ninety-eight HTTP calls on one real install, which is the difference between
+  a page and a wait. That result is now cached.
+- **Re-sync with tuya-local.** A device can be plainly reachable and its entry
+  still refuse to load, because the address, key or protocol it was set up
+  with has moved on. Healing only acts where it can prove something changed;
+  this just re-sends what we can see now.
+
 ## 0.1.26
 
 - **Automations that target a device can be repointed.** Moving an entity id

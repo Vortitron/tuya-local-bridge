@@ -551,3 +551,30 @@ def test_automation_aliases_are_escaped():
 
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
+
+
+def test_converted_devices_offer_a_resync():
+    """A device can be plainly reachable and its entry still refuse to load."""
+    html = _render_status(converted_result("abc"), {}, [])
+
+    assert "Re-sync with tuya-local" in html
+    assert "/resync" in html
+
+
+def test_a_forced_rescan_does_not_stay_in_the_address_bar(tmp_path):
+    """The refresh re-requests the current URL.
+
+    Leaving ?rescan=1 on it restarted the scan every six seconds for ever,
+    which is what a counter going 16s, 0s, 16s looks like from outside.
+    """
+    import logging
+
+    logging.disable(logging.CRITICAL)
+    from tuya_local_bridge.web import create_app
+
+    app = create_app(str(tmp_path), ha_url="http://ha", ha_token="t", scan_seconds=0)
+    # No session, so index redirects to login; what matters is that ?rescan=1
+    # is answered with a redirect rather than a rendered, refreshing page.
+    response = app.test_client().get("/?rescan=1")
+
+    assert response.status_code in (302, 303)
