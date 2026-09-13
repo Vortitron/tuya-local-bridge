@@ -37,9 +37,11 @@ from .swap import (
     apply_rename,
     apply_swap,
     candidates_for,
+    device_display_name,
     entities_for_device,
     plan_rename,
     plan_swap,
+    suggest_predecessors,
 )
 
 logger = logging.getLogger(__name__)
@@ -271,14 +273,15 @@ def create_app(
         return ha_discovery.map_devices(raw, entry_domains=owners)
 
     def rename_devices(registry, store, tuya_id: str) -> str | None:
-        """Give the local device the cloud device's name."""
-        devices = device_map()
-        mapping = devices.get(tuya_id) or {}
-        if "tuya" not in mapping or "tuya_local" not in mapping:
-            return None
+        """Give the local device the predecessor's name."""
+        mapping = (device_map().get(tuya_id)) or {}
         registry_devices = {d["id"]: d for d in raw_device_registry()}
-        cloud = registry_devices.get(mapping["tuya"])
-        local = registry_devices.get(mapping["tuya_local"])
+        record = store.get(tuya_id)
+        local_id = mapping.get("tuya_local") or (
+            record.local_device_id if record else ""
+        )
+        cloud = registry_devices.get(predecessor_of(tuya_id, mapping, store))
+        local = registry_devices.get(local_id or "")
         if not cloud or not local:
             return None
         return apply_rename(registry, store, tuya_id, cloud, local)
@@ -299,8 +302,10 @@ def create_app(
             if record.active_migration is None:
                 continue
             mapping = devices.get(tuya_id) or {}
-            cloud = registry_devices.get(mapping.get("tuya", ""))
-            local = registry_devices.get(mapping.get("tuya_local", ""))
+            cloud = registry_devices.get(predecessor_of(tuya_id, mapping, store))
+            local = registry_devices.get(
+                mapping.get("tuya_local") or record.local_device_id or ""
+            )
             if not cloud or not local:
                 continue
             if plan_rename(cloud, local) is not None:
@@ -352,8 +357,9 @@ def create_app(
         for tuya_id, record in store.devices.items():
             if record.active_migration is None:
                 continue
-            cloud_device = (devices.get(tuya_id) or {}).get("tuya")
-            local_device = (devices.get(tuya_id) or {}).get("tuya_local")
+            mapping = devices.get(tuya_id) or {}
+            cloud_device = predecessor_of(tuya_id, mapping, store)
+            local_device = mapping.get("tuya_local") or record.local_device_id
             if cloud_device and local_device:
                 wanted.append((tuya_id, record.name or tuya_id, cloud_device, local_device))
         if not wanted:
@@ -383,29 +389,70 @@ def create_app(
                 found.append((tuya_id, name, sorted(hits, key=lambda h: h[1].lower())))
         return found
 
-    def swap_plans(device_ids):
-        """(plans, problems) for the devices asked about."""
+    def predecessor_of(tuya_id, mapping, store=None, chosen=None):
+        """The Home Assistant device the converted one is taking over from.
+
+        Usually tuya-local's twin from the Tuya integration. Where the device
+        reached Home Assistant through some other cloud entirely, it is
+        whichever device the owner picked -- remembered afterwards, so the
+        question is asked once.
+        """
+        if (chosen or {}).get(tuya_id):
+            return chosen[tuya_id]
+        record = (store or ProvenanceStore(store_path)).get(tuya_id)
+        if record and record.predecessor_device_id:
+            return record.predecessor_device_id
+        return mapping.get("tuya", "")
+
+    def swap_plans(device_ids, predecessors=None):
+        """(registry, plans, problems, questions) for the devices asked about.
+
+        ``questions`` are devices that are converted and ready but whose
+        predecessor we cannot work out -- they need a person to say which
+        device this replaces before there is a plan to show.
+        """
         registry = entity_registry()
         devices = device_map()
         entities = registry.list_entities()
+        store = ProvenanceStore(store_path)
+        registry_devices = {d["id"]: d for d in raw_device_registry()}
+        local_ids = {
+            (m or {}).get("tuya_local", "") for m in devices.values()
+        } - {""}
 
-        plans, problems = [], []
+        plans, problems, questions = [], [], []
         for tuya_id in device_ids:
             mapping = devices.get(tuya_id) or {}
-            if "tuya" not in mapping or "tuya_local" not in mapping:
+            local_device_id = mapping.get("tuya_local")
+            if not local_device_id:
                 problems.append(
-                    (tuya_id, "needs both a cloud and a local device in Home Assistant")
+                    (tuya_id, "tuya-local has no device for this yet — convert it first")
                 )
                 continue
+
+            cloud_device_id = predecessor_of(tuya_id, mapping, store, predecessors)
+            if not cloud_device_id or cloud_device_id not in registry_devices:
+                local_device = registry_devices.get(local_device_id) or {}
+                questions.append((
+                    tuya_id,
+                    device_display_name(local_device) or tuya_id,
+                    suggest_predecessors(
+                        local_device,
+                        registry_devices.values(),
+                        exclude=local_ids,
+                    ),
+                ))
+                continue
+
             plan = plan_swap(
-                entities_for_device(entities, mapping["tuya"]),
-                entities_for_device(entities, mapping["tuya_local"]),
+                entities_for_device(entities, cloud_device_id),
+                entities_for_device(entities, local_device_id),
             )
             if plan.is_empty and not plan.cloud_unmatched:
                 problems.append((tuya_id, "nothing pairs up to swap"))
                 continue
-            plans.append((tuya_id, plan))
-        return registry, plans, problems
+            plans.append((tuya_id, plan, cloud_device_id, local_device_id))
+        return registry, plans, problems, questions
 
     scan_lock = threading.Lock()
     scan_cache: dict[str, Any] = {
@@ -768,6 +815,14 @@ def create_app(
             f"{len(done)} converted, {len(failed)} failed",
         )
 
+    def _replacements() -> dict[str, str]:
+        """Predecessor choices carried on the form, keyed by Tuya device id."""
+        return {
+            key[len("replaces__") :]: value
+            for key, value in request.form.items()
+            if key.startswith("replaces__") and value
+        }
+
     @app.post("/swap/confirm")
     def swap_confirm():
         """Show exactly which id moves where, before anything moves.
@@ -785,8 +840,10 @@ def create_app(
         if not chosen:
             return redirect(_u("index"))
 
-        _registry, plans, problems = swap_plans(chosen)
-        return page(_render_swap_preview(plans, problems), "Check before swapping")
+        _registry, plans, problems, questions = swap_plans(chosen, _replacements())
+        return page(
+            _render_swap_preview(plans, problems, questions), "Check before swapping"
+        )
 
     @app.post("/swap")
     def swap_apply():
@@ -794,8 +851,13 @@ def create_app(
         if not chosen:
             return redirect(_u("index"))
 
-        registry, plans, problems = swap_plans(chosen)
+        replacements = _replacements()
         store = ProvenanceStore(store_path)
+        registry, plans, problems, questions = swap_plans(chosen, replacements)
+        problems += [
+            (tuya_id, "nobody said which device this replaces")
+            for tuya_id, _name, _cands in questions
+        ]
 
         # Pairings the person chose on the preview, keyed by cloud entity.
         choices = {
@@ -805,7 +867,11 @@ def create_app(
         }
 
         done, failed = [], list(problems)
-        for tuya_id, plan in plans:
+        for tuya_id, plan, cloud_device_id, local_device_id in plans:
+            # Remember the pairing before acting on it, so a predecessor the
+            # owner had to name by hand is never asked for twice -- and so the
+            # rename and the automation sweep can find it later.
+            store.record_predecessor(tuya_id, cloud_device_id, local_device_id)
             # Only the choices this device was asked about. The form carries
             # every device's answers together, and handing one device another
             # device's choice makes it refuse a pairing that was never
@@ -1233,7 +1299,48 @@ def stored_devices(store: ProvenanceStore, known: set[str]) -> list:
 
 
 
-def _render_swap_preview(plans, problems) -> str:
+def _render_swap_questions(questions) -> str:
+    """Ask which device each converted one replaces.
+
+    Only reached where nothing joins the two sides automatically, which in
+    practice means the device came into Home Assistant through a different
+    cloud than the one holding its key — a LEDVANCE bulb arriving via
+    SmartThings, say. Its own list is ranked by name, because the name is all
+    the two representations have in common.
+    """
+    rows = []
+    for tuya_id, name, candidates in questions:
+        options = "".join(
+            f'<option value="{_esc(str(d.get("id") or ""))}">'
+            f'{_esc(device_display_name(d))}</option>'
+            for d in candidates
+        )
+        rows.append(
+            f"<tr><td>{_esc(name)}<br><code>{_esc(tuya_id)}</code></td>"
+            f'<td class="muted">replaces</td>'
+            f'<td><select name="replaces__{_esc(tuya_id)}">'
+            '<option value="">nothing — it is new</option>'
+            f"{options}</select></td></tr>"
+        )
+    return (
+        '<div class="note"><b>Which device is this replacing?</b> Nothing in '
+        "Home Assistant links these two: the bulb reached Home Assistant "
+        "through a different cloud than the one holding its key, so they "
+        "share no id — only, usually, a name. Pick the one it replaces and "
+        "its entity ids can move across. The answer is remembered.</div>"
+        '<form method="post" action="' + _u("swap_confirm") + '">'
+        + "".join(
+            f'<input type="hidden" name="device" value="{_esc(t)}">'
+            for t, _n, _c in questions
+        )
+        + '<div class="card wrap"><table>'
+        "<tr><th>converted device</th><th></th><th>existing device</th></tr>"
+        + "".join(rows)
+        + "</table></div><button>Show what would move</button></form>"
+    )
+
+
+def _render_swap_preview(plans, problems, questions=()) -> str:
     """What the swap would do, device by device, and what it needs asking.
 
     Everything lives in one form so a pairing chosen here travels with the
@@ -1248,8 +1355,12 @@ def _render_swap_preview(plans, problems) -> str:
     any_choices = False
     notes: list[str] = []
 
-    for tuya_id, plan in plans:
+    for tuya_id, plan, cloud_device_id, _local_device_id in plans:
         parts.append(f'<input type="hidden" name="device" value="{_esc(tuya_id)}">')
+        parts.append(
+            f'<input type="hidden" name="replaces__{_esc(tuya_id)}" '
+            f'value="{_esc(cloud_device_id)}">'
+        )
 
         if plan.pairs:
             any_pairs = True
@@ -1316,12 +1427,17 @@ def _render_swap_preview(plans, problems) -> str:
     parts.append("</form>")
     parts.extend(notes)
 
-    if not (any_pairs or any_choices):
+    if questions:
+        parts.append(_render_swap_questions(questions))
+
+    if not (any_pairs or any_choices or questions):
         # Nothing can be done, but why is worth saying: a device whose cloud
         # entities have no local counterpart is a different situation from one
         # that is already swapped, and the notes are the only thing that says
         # which this is.
         parts = notes or ['<div class="note">Nothing to swap.</div>']
+    elif questions and not (any_pairs or any_choices):
+        parts = [_render_swap_questions(questions), *notes]
 
     if problems:
         parts.append(

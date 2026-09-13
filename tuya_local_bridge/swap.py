@@ -201,6 +201,53 @@ def plan_swap(
     return plan
 
 
+def _normalise(name: str) -> str:
+    return " ".join(str(name or "").lower().replace("_", " ").split())
+
+
+def suggest_predecessors(
+    local_device: dict[str, Any],
+    devices: Iterable[dict[str, Any]],
+    *,
+    exclude: Iterable[str] = (),
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Devices the converted one might be replacing, likeliest first.
+
+    The swap normally finds the pair itself: a converted device exists twice
+    under the same Tuya id, once from the cloud integration and once from
+    tuya-local. That only works when the *same* cloud knows the device.
+
+    White-label bulbs break it. LEDVANCE ones reach Home Assistant through
+    SmartThings, whose devices carry a SmartThings uuid and no Tuya id
+    anywhere -- so nothing joins the two, and the swap reported "needs both a
+    cloud and a local device" for a device plainly sitting there under another
+    name. Nobody can act on that. The person looking at the screen knows which
+    device it is, so offer a ranked list and let them say.
+
+    Ranked on the name, because that is all the two sides share.
+    """
+    from difflib import SequenceMatcher
+
+    skip = {str(local_device.get("id") or "")} | {str(e) for e in exclude}
+    wanted = _normalise(device_display_name(local_device))
+
+    scored: list[tuple[float, str, dict[str, Any]]] = []
+    for device in devices or []:
+        if not isinstance(device, dict) or str(device.get("id") or "") in skip:
+            continue
+        name = device_display_name(device)
+        if not name:
+            continue
+        score = SequenceMatcher(None, wanted, _normalise(name)).ratio()
+        scored.append((score, _normalise(name), device))
+
+    # Name, then id, so equally-scored devices come out in a stable order
+    # rather than shuffling between page loads.
+    scored.sort(key=lambda row: (-row[0], row[1], str(row[2].get("id") or "")))
+    return [device for _score, _name, device in scored[:limit]]
+
+
 def domain_of(entity_id: str) -> str:
     """The bit before the dot: ``switch.hot_water`` -> ``switch``."""
     return str(entity_id).split(".", 1)[0] if "." in str(entity_id) else ""

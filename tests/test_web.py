@@ -93,7 +93,7 @@ PAIR = EntityPair(
 
 
 def test_the_preview_says_which_id_moves_where():
-    html = _render_swap_preview([("abc", _plan(PAIR))], [])
+    html = _render_swap_preview([("abc", _plan(PAIR), "cloud_dev", "local_dev")], [])
 
     assert "light.front_porch_local" in html
     assert "light.front_porch" in html
@@ -105,7 +105,8 @@ def test_the_preview_warns_about_entities_left_on_the_cloud():
     # A plug's main switch often does not pair, and anything using it keeps
     # going through Tuya. Silence there would be the worst outcome.
     html = _render_swap_preview(
-        [("abc", _plan(PAIR, cloud_unmatched=["switch.plug_socket_1"]))], []
+        [("abc", _plan(PAIR, cloud_unmatched=["switch.plug_socket_1"]), "cloud_dev", "local_dev")],
+        [],
     )
 
     assert "switch.plug_socket_1" in html
@@ -121,7 +122,9 @@ def test_the_preview_offers_nothing_to_press_when_there_is_nothing_to_do():
 
 
 def test_devices_carry_through_the_preview_to_the_apply_form():
-    html = _render_swap_preview([("bf1000aa2000bb3000ccd1", _plan(PAIR))], [])
+    html = _render_swap_preview(
+        [("bf1000aa2000bb3000ccd1", _plan(PAIR), "cloud_dev", "local_dev")], []
+    )
     assert 'name="device" value="bf1000aa2000bb3000ccd1"' in html
 
 
@@ -145,13 +148,14 @@ def test_swap_preview_escapes_entity_ids():
         domain="light",
         name=None,
     )
-    html = _render_swap_preview([("abc", _plan(pair))], [])
+    html = _render_swap_preview([("abc", _plan(pair), "cloud_dev", "local_dev")], [])
 
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
 
 
 # ── Fixing devices converted before the offer existed ──────────────────────
+
 
 def converted_result(*ids):
     """A reconciliation where the given devices are already on tuya-local."""
@@ -186,9 +190,7 @@ def test_undo_is_offered_only_once_something_has_moved():
 
 
 def test_both_actions_share_one_form_so_the_selection_serves_either():
-    html = _render_status(
-        converted_result("abc", "def"), {}, [], swapped=frozenset({"abc"})
-    )
+    html = _render_status(converted_result("abc", "def"), {}, [], swapped=frozenset({"abc"}))
 
     assert 'name="device" value="abc"' in html
     assert 'name="device" value="def"' in html
@@ -202,6 +204,7 @@ def test_the_section_says_why_it_matters():
 
 
 # ── Saying what is happening while the network is scanned ──────────────────
+
 
 def test_a_running_scan_says_so_with_a_counter():
     # A still "Scanning..." with no number is exactly what a hung page looks
@@ -245,6 +248,7 @@ def test_scan_errors_are_escaped():
 
 # ── Asking, where the matcher will not guess ───────────────────────────────
 
+
 def _plan_with_choice():
     """A plug: two switches each side, names that do not correspond."""
     from tuya_local_bridge.swap import plan_swap
@@ -262,7 +266,7 @@ def _plan_with_choice():
 
 
 def test_undecidable_entities_become_a_question():
-    html = _render_swap_preview([("abc", _plan_with_choice())], [])
+    html = _render_swap_preview([("abc", _plan_with_choice(), "cloud_dev", "local_dev")], [])
 
     assert "These need you to decide" in html
     assert 'name="pair__switch.plug_socket_1"' in html
@@ -273,14 +277,14 @@ def test_undecidable_entities_become_a_question():
 
 def test_the_question_and_the_button_are_in_one_form():
     # A choice made here has to travel with the button that applies it.
-    html = _render_swap_preview([("abc", _plan_with_choice())], [])
+    html = _render_swap_preview([("abc", _plan_with_choice(), "cloud_dev", "local_dev")], [])
 
     assert html.count("<form") == 1
     assert html.index("pair__switch.plug_socket_1") < html.index("<button>")
 
 
 def test_a_device_needing_only_choices_still_offers_the_button():
-    html = _render_swap_preview([("abc", _plan_with_choice())], [])
+    html = _render_swap_preview([("abc", _plan_with_choice(), "cloud_dev", "local_dev")], [])
     assert "Move the ids" in html
 
 
@@ -288,7 +292,7 @@ def test_entities_with_no_candidate_at_all_are_not_offered_a_dropdown():
     from tuya_local_bridge.swap import plan_swap
 
     plan = plan_swap([{"entity_id": "sensor.only_cloud", "original_name": "Signal"}], [])
-    html = _render_swap_preview([("abc", plan)], [])
+    html = _render_swap_preview([("abc", plan, "cloud_dev", "local_dev")], [])
 
     assert "Left on the cloud" in html
     assert "pair__" not in html
@@ -304,16 +308,24 @@ def test_one_devices_choice_is_not_offered_to_another(monkeypatch, tmp_path):
     from tuya_local_bridge.swap import plan_swap
 
     plan_a = plan_swap(
-        [{"entity_id": "switch.a_socket", "original_name": "Socket 1"},
-         {"entity_id": "switch.a_lock", "original_name": "Child lock"}],
-        [{"entity_id": "switch.a_local", "original_name": None},
-         {"entity_id": "switch.a_over", "original_name": "Overcharge"}],
+        [
+            {"entity_id": "switch.a_socket", "original_name": "Socket 1"},
+            {"entity_id": "switch.a_lock", "original_name": "Child lock"},
+        ],
+        [
+            {"entity_id": "switch.a_local", "original_name": None},
+            {"entity_id": "switch.a_over", "original_name": "Overcharge"},
+        ],
     )
     plan_b = plan_swap(
-        [{"entity_id": "switch.b_socket", "original_name": "Socket 1"},
-         {"entity_id": "switch.b_lock", "original_name": "Child lock"}],
-        [{"entity_id": "switch.b_local", "original_name": None},
-         {"entity_id": "switch.b_over", "original_name": "Overcharge"}],
+        [
+            {"entity_id": "switch.b_socket", "original_name": "Socket 1"},
+            {"entity_id": "switch.b_lock", "original_name": "Child lock"},
+        ],
+        [
+            {"entity_id": "switch.b_local", "original_name": None},
+            {"entity_id": "switch.b_over", "original_name": "Overcharge"},
+        ],
     )
 
     choices = {"switch.a_socket": "switch.a_local"}
@@ -388,9 +400,7 @@ def test_stored_vendor_keys_join_the_picture(tmp_path):
     from tuya_local_bridge.web import stored_devices
 
     store = ProvenanceStore(str(tmp_path / "p.json"))
-    store.record_cloud(
-        [CloudDevice(id="ledvance1", name="gold light 1", local_key="k")], now=1.0
-    )
+    store.record_cloud([CloudDevice(id="ledvance1", name="gold light 1", local_key="k")], now=1.0)
 
     extra = stored_devices(store, known={"smartlife1"})
 
@@ -432,9 +442,7 @@ def test_every_page_agrees_about_which_devices_exist(tmp_path, monkeypatch):
     store.save()
 
     session_devices = [CloudDevice(id="smartlife1", name="bedroom light", local_key="k1")]
-    folded = session_devices + web.stored_devices(
-        store, {d.id for d in session_devices}
-    )
+    folded = session_devices + web.stored_devices(store, {d.id for d in session_devices})
 
     ids = {d.id for d in folded}
     assert "ledvance1" in ids, "the vendor device must survive the rebuild"
@@ -447,7 +455,9 @@ def test_unverifiable_keys_are_explained_with_a_way_to_fix_them():
 
     records = [DeviceRecord(device_id="g1", name="gold light 1")]
     html = _render_status(
-        reconcile([], []), {}, [],
+        reconcile([], []),
+        {},
+        [],
         unverifiable={("ledvance", "you@example.com"): records},
     )
 
@@ -467,16 +477,16 @@ def test_a_long_list_is_summarised_rather_than_dumped():
     from tuya_local_bridge.store import DeviceRecord
 
     records = [DeviceRecord(device_id=f"g{i}", name=f"gold light {i}") for i in range(9)]
-    html = _render_status(
-        reconcile([], []), {}, [], unverifiable={("ledvance", ""): records}
-    )
+    html = _render_status(reconcile([], []), {}, [], unverifiable={("ledvance", ""): records})
 
     assert "and 3 more" in html
 
 
 def test_devices_whose_names_never_followed_are_offered_a_catch_up():
     html = _render_status(
-        reconcile([], []), {}, [],
+        reconcile([], []),
+        {},
+        [],
         needing_rename=[("bf2d4fc9", "ice ice machine"), ("bfed759f", "hot water")],
     )
 
@@ -578,3 +588,50 @@ def test_a_forced_rescan_does_not_stay_in_the_address_bar(tmp_path):
     response = app.test_client().get("/?rescan=1")
 
     assert response.status_code in (302, 303)
+
+
+# ── Asking which device a converted one replaces ───────────────────────────
+
+from tuya_local_bridge.web import _render_swap_questions  # noqa: E402
+
+
+def _question():
+    return [(
+        "bf1ca00f2963c8dab2mvya",
+        "gold light 1",
+        [{"id": "st1", "name": "gold light 1"}, {"id": "st2", "name": "gold light 4"}],
+    )]
+
+
+def test_a_device_with_no_twin_is_asked_about_rather_than_refused():
+    """"Needs both a cloud and a local device" is not something anyone can act on.
+
+    A LEDVANCE bulb arrives through SmartThings, which shares no id with Tuya,
+    so the pairing cannot be found — but the device is plainly there and the
+    owner knows which it is.
+    """
+    html = _render_swap_questions(_question())
+
+    assert 'name="replaces__bf1ca00f2963c8dab2mvya"' in html
+    assert "gold light 1" in html
+    assert "<button>" in html
+
+
+def test_the_answer_can_be_that_there_is_no_predecessor():
+    # A device genuinely new to Home Assistant has nothing to take over from,
+    # and must not be forced into swapping with whatever ranked first.
+    assert 'value=""' in _render_swap_questions(_question())
+
+
+def test_the_question_is_shown_even_when_nothing_else_can_move():
+    html = _render_swap_preview([], [], _question())
+
+    assert 'name="replaces__bf1ca00f2963c8dab2mvya"' in html
+    assert "Nothing to swap" not in html
+
+
+def test_the_chosen_predecessor_travels_to_the_apply_form():
+    # The preview re-plans from the answer; the apply step must not have to
+    # guess it again, or it would fall back to "no twin" and refuse.
+    html = _render_swap_preview([("abc", _plan(PAIR), "cloud_dev", "local_dev")], [])
+    assert 'name="replaces__abc" value="cloud_dev"' in html

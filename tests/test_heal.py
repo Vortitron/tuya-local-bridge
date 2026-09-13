@@ -213,3 +213,31 @@ def test_abort_is_raised_with_its_reason():
     with pytest.raises(HealError) as excinfo:
         repair(flow, drift_fixture())
     assert "cannot_connect" in str(excinfo.value)
+
+
+def test_a_repaired_entry_is_reloaded():
+    """Saving the options is not enough to bring the entry back.
+
+    An entry in setup_retry keeps retrying on its own schedule with the values
+    it already failed on, so the repair looked like it had done nothing until
+    the integration was reloaded by hand.
+    """
+    class Reloading(FakeFlow):
+        reloaded = None
+
+        def reload_entry(self, entry_id):
+            type(self).reloaded = entry_id
+
+    flow = Reloading({"type": "create_entry"})
+    assert repair(flow, drift_fixture()) == "repaired"
+    assert Reloading.reloaded == "entry1"
+
+
+def test_a_reload_that_fails_does_not_undo_the_repair():
+    # The values are saved either way; a reload that will not happen is worth
+    # a log line, not an exception that reports the repair as failed.
+    class Stubborn(FakeFlow):
+        def reload_entry(self, entry_id):
+            raise RuntimeError("boom")
+
+    assert repair(Stubborn({"type": "create_entry"}), drift_fixture()) == "repaired"

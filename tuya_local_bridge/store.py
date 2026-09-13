@@ -100,6 +100,13 @@ class DeviceRecord:
     # end into a question we can ask the right person.
     key_source: str = ""
     key_account: str = ""
+    # The Home Assistant devices this Tuya device is represented by: the one it
+    # is replacing, and tuya-local's own. The predecessor is not always a Tuya
+    # device -- LEDVANCE bulbs reach Home Assistant through SmartThings, which
+    # shares no identifier with Tuya at all -- so once somebody has told us
+    # which device it is, that answer is worth keeping.
+    predecessor_device_id: str = ""
+    local_device_id: str = ""
     last_lan_ip: str = ""
     last_seen_on_lan: float | None = None
     protocol_version: str = ""
@@ -277,6 +284,17 @@ class ProvenanceStore:
         )
         rec.migrations.append(migration)
         return migration
+
+    def record_predecessor(
+        self, device_id: str, predecessor_device_id: str, local_device_id: str
+    ) -> DeviceRecord:
+        """Remember which Home Assistant device this one took over from."""
+        rec = self.devices.get(device_id)
+        if rec is None:
+            rec = self.devices[device_id] = DeviceRecord(device_id=device_id)
+        rec.predecessor_device_id = predecessor_device_id or rec.predecessor_device_id
+        rec.local_device_id = local_device_id or rec.local_device_id
+        return rec
 
     def record_rename(
         self,

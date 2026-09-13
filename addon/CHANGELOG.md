@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.29
+
+- **A device can now replace one from any integration.** The swap found its
+  pair by looking for the same Tuya id twice, which only works when the same
+  cloud knows the device. LEDVANCE bulbs reach Home Assistant through
+  SmartThings — a SmartThings uuid, no Tuya id anywhere — so five converted
+  bulbs sat there reporting "needs both a cloud and a local device in Home
+  Assistant", which is true and useless. It now asks which device the
+  converted one replaces, ranked by name with the likeliest first, and
+  remembers the answer so it is asked once.
+- **Re-sync brings the entry back itself.** Saving the options left an entry
+  in `setup_retry` retrying on its own schedule with the values it had already
+  failed on, so a successful repair looked like it had done nothing until the
+  integration was reloaded by hand. It now asks for the reload.
+
 ## 0.1.28
 
 - **Re-sync works.** It was sending the config flow's field set at the options

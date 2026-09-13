@@ -349,8 +349,23 @@ def cmd_swap(args) -> int:
     store = ProvenanceStore(store_path)
     entities = registry.list_entities()
 
+    def predecessor(tuya_id: str) -> str:
+        """The device being replaced: tuya-local's twin, or one named before.
+
+        Not every device has a twin. A white-label bulb can reach Home
+        Assistant through a different cloud entirely, sharing no id with Tuya,
+        and then only a person can say which device it is -- which they do in
+        the web interface. Honour that answer here too.
+        """
+        record = store.get(tuya_id)
+        if record and record.predecessor_device_id:
+            return record.predecessor_device_id
+        return (devices.get(tuya_id) or {}).get("tuya", "")
+
     convertible = sorted(
-        d for d, m in devices.items() if "tuya" in m and "tuya_local" in m
+        d
+        for d, m in devices.items()
+        if "tuya_local" in m and predecessor(d)
     )
     targets = args.device_id or (convertible if args.all else [])
     if not targets:
@@ -372,12 +387,16 @@ def cmd_swap(args) -> int:
     changed = False
     for tuya_id in targets:
         mapping = devices.get(tuya_id) or {}
-        if "tuya" not in mapping or "tuya_local" not in mapping:
-            print(f"{tuya_id}: skipped (needs both a cloud and a local device)")
+        cloud_device_id = predecessor(tuya_id)
+        if not cloud_device_id or "tuya_local" not in mapping:
+            print(
+                f"{tuya_id}: skipped (nothing says which device this replaces — "
+                "the web interface can ask)"
+            )
             continue
 
         plan = plan_swap(
-            entities_for_device(entities, mapping["tuya"]),
+            entities_for_device(entities, cloud_device_id),
             entities_for_device(entities, mapping["tuya_local"]),
         )
         print(f"\n{tuya_id}")

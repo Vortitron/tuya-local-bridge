@@ -69,6 +69,9 @@ class OptionsFlowClient(Protocol):
     ) -> dict[str, Any]:
         ...
 
+    def reload_entry(self, entry_id: str) -> None:
+        ...
+
 
 @dataclass
 class Drift:
@@ -210,6 +213,20 @@ def repair(client: OptionsFlowClient, drift: Drift) -> str:
 
     step_type = (step or {}).get("type")
     if step_type == "create_entry":
+        # Saving the options does not always bring the entry back: an entry
+        # sitting in setup_retry keeps retrying on its own slow schedule with
+        # the values it failed on, so a repair looked like it had done nothing
+        # until somebody reloaded the integration by hand. Ask for the reload.
+        reload_entry = getattr(client, "reload_entry", None)
+        if callable(reload_entry):
+            try:
+                reload_entry(drift.entry_id)
+            except Exception:
+                logger.warning(
+                    "%s: repaired, but the entry would not reload",
+                    drift.device_id,
+                    exc_info=True,
+                )
         return "repaired"
     if step_type == "abort":
         raise HealError(f"{drift.device_id}: {step.get('reason') or 'aborted'}")
@@ -265,6 +282,9 @@ class DirectOptionsFlowClient:
 
     def start_options_flow(self, entry_id: str) -> dict[str, Any]:
         return self._post("/api/config/config_entries/options/flow", {"handler": entry_id})
+
+    def reload_entry(self, entry_id: str) -> None:
+        self._post(f"/api/config/config_entries/entry/{quote(entry_id)}/reload", {})
 
     def continue_options_flow(
         self, flow_id: str, user_input: dict[str, Any]

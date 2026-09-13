@@ -7,6 +7,7 @@ from tuya_local_bridge.swap import (
     entities_for_device,
     plan_swap,
     rollback,
+    suggest_predecessors,
 )
 
 
@@ -451,3 +452,59 @@ class TestTheDeviceNameFollowsTheIds:
         rollback_rename(self._Registry(), store, "abc")
 
         assert rollback_rename(self._Registry(), store, "abc") is None
+
+
+# ── Devices whose two halves share no id at all ────────────────────────────
+
+def _device(id_, name, **extra):
+    return {"id": id_, "name": name, **extra}
+
+
+def test_the_likeliest_predecessor_is_offered_first():
+    """LEDVANCE bulbs reach Home Assistant through SmartThings.
+
+    A SmartThings device carries a SmartThings uuid and no Tuya id anywhere,
+    so nothing joins it to the tuya-local device holding the same bulb. The
+    name is the only thing the two have in common, so rank on that and let
+    the person confirm.
+    """
+    local = _device("local1", "gold light 1")
+    candidates = suggest_predecessors(
+        local,
+        [
+            local,
+            _device("st1", "gold light 1"),
+            _device("st2", "gold light 4"),
+            _device("boiler", "Hot Water"),
+        ],
+        exclude={"local1"},
+    )
+
+    assert [d["id"] for d in candidates][:1] == ["st1"]
+    assert "local1" not in [d["id"] for d in candidates]
+
+
+def test_a_user_given_name_wins_over_the_integration_name():
+    candidates = suggest_predecessors(
+        _device("local1", "gold light 1"),
+        [_device("st1", "TS0505B", name_by_user="gold light 1")],
+    )
+    assert [d["id"] for d in candidates] == ["st1"]
+
+
+def test_every_local_device_is_kept_out_of_the_list():
+    # Offering one converted device as another's predecessor would swap two
+    # tuya-local entities with each other and disable one of them.
+    candidates = suggest_predecessors(
+        _device("local1", "gold light 1"),
+        [_device("local2", "gold light 2"), _device("st1", "gold light 1")],
+        exclude={"local1", "local2"},
+    )
+    assert [d["id"] for d in candidates] == ["st1"]
+
+
+def test_the_offer_is_ordered_the_same_way_every_time():
+    devices = [_device(f"d{i}", "same name") for i in range(5)]
+    first = [d["id"] for d in suggest_predecessors(_device("x", "other"), devices)]
+    second = [d["id"] for d in suggest_predecessors(_device("x", "other"), devices)]
+    assert first == second
